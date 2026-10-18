@@ -653,7 +653,7 @@ export default async function proxy(req, res) {
   let activeHeaders = fetchHeaders;
 
   try {
-    response = await safeRequest(activeUrl, activeHeaders, req?.signal);
+    response = await fetchWithBackoff(activeUrl, activeHeaders, req?.signal);
     statusCode = response.statusCode;
     responseHeaders = response.headers;
 
@@ -668,7 +668,7 @@ export default async function proxy(req, res) {
       activeHeaders = headers;
 
       try {
-        response = await safeRequest(activeUrl, activeHeaders, req?.signal);
+        response = await fetchWithBackoff(activeUrl, activeHeaders, req?.signal);
         statusCode = response.statusCode;
         responseHeaders = response.headers;
       } catch (fallbackErr) {
@@ -692,7 +692,7 @@ export default async function proxy(req, res) {
     };
 
     try {
-      response = await safeRequest(activeUrl, retryHeaders, req.signal);
+      response = await fetchWithBackoff(activeUrl, retryHeaders, req.signal);
       statusCode = response.statusCode;
       responseHeaders = response.headers;
     } catch (err) {
@@ -862,7 +862,7 @@ if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawB
               'cache-control': 'no-cache'
             };
 
-            const retryResponse = await safeRequest(activeUrl, retryHeaders, req.signal);
+            const retryResponse = await fetchWithBackoff(activeUrl, retryHeaders, req.signal);
             const retryBody = toBuffer(retryResponse.body);
 
             if (retryBody.length < 100) continue;
