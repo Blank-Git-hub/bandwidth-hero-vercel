@@ -14,9 +14,11 @@ const createHash = crypto.createHash;
 const subtle = crypto.webcrypto?.subtle ?? globalThis.crypto?.subtle;
 
 const UPSTREAM_ACCEPT_ENCODING = process.env.UPSTREAM_ACCEPT_ENCODING || 'identity';
-const REQUEST_TIMEOUT_MS = parseInt(process.env.REQUEST_TIMEOUT_MS, 10) || 8000;
-const BODY_TIMEOUT_MS = parseInt(process.env.BODY_TIMEOUT_MS, 10) || 20000;
-const UPSTREAM_DEADLINE_MS = parseInt(process.env.UPSTREAM_DEADLINE_MS, 10) || 20000;
+const REQUEST_TIMEOUT_MS = parseInt(process.env.REQUEST_TIMEOUT_MS, 10) || 15000;
+const BODY_TIMEOUT_MS = parseInt(process.env.BODY_TIMEOUT_MS, 10) || 50000;
+const UPSTREAM_DEADLINE_MS = parseInt(process.env.UPSTREAM_DEADLINE_MS, 10) || 55000;
+const UPSTREAM_TOTAL_DEADLINE_MS = safeInt(process.env.UPSTREAM_TOTAL_DEADLINE_MS, 55000);
+const MAX_RETRIES = safeInt(process.env.UPSTREAM_MAX_RETRIES, 2);
 
 // FEATURE: Corrupted Image Auto-Retry
 const MAX_DECODE_RETRIES = safeInt(process.env.MAX_DECODE_RETRIES, 1);
@@ -471,10 +473,10 @@ async function consumeWithLimit(body) {
   return Buffer.concat(chunks, total);
 }
 
-async function safeRequest(url, headers, signal, maxRedirects = 5) {
+async function safeRequest(url, headers, signal, maxRedirects = 5, deadlineMs = UPSTREAM_DEADLINE_MS) {
   let currentUrl = url;
   let requestHeaders = headers;
-  const deadline = Date.now() + UPSTREAM_DEADLINE_MS;
+  const deadline = Date.now() + deadlineMs;
 
   for (let i = 0; i <= maxRedirects; i++) {
     if (Date.now() > deadline) {
@@ -531,6 +533,58 @@ async function safeRequest(url, headers, signal, maxRedirects = 5) {
   const err = new Error('TOO_MANY_REDIRECTS');
   err.code = 'TOO_MANY_REDIRECTS';
   throw err;
+}
+
+const RETRYABLE_CODES = new Set([
+  'ETIMEDOUT', 'ERR_GOT_REQUEST_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT', 'UPSTREAM_DEADLINE', 'ECONNRESET', 'UND_ERR_CONNECT_TIMEOUT'
+]);
+
+const RETRYABLE_STATUSES = new Set([502, 503, 504, 429, 520, 521, 522, 523, 524]);
+
+async function fetchWithBackoff(url, headers, signal) {
+  const totalDeadline = Date.now() + UPSTREAM_TOTAL_DEADLINE_MS;
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const remaining = totalDeadline - Date.now();
+
+    if (signal?.aborted || remaining <= 0) {
+      break;
+    }
+
+    try {
+      const attemptDeadline = Math.min(remaining, UPSTREAM_DEADLINE_MS);
+      const res = await safeRequest(url, headers, signal, 5, attemptDeadline);
+
+      if (RETRYABLE_STATUSES.has(res.statusCode) && attempt < MAX_RETRIES) {
+        lastError = new Error(`RETRYABLE_STATUS_${res.statusCode}`);
+        lastError.code = `STATUS_${res.statusCode}`;
+      } else {
+        return res;
+      }
+    } catch (err) {
+      lastError = err;
+
+      if (!RETRYABLE_CODES.has(err.code)) {
+        throw err;
+      }
+    }
+
+    if (attempt < MAX_RETRIES) {
+      const baseDelay = 400 * Math.pow(2, attempt);
+      const jitter = Math.random() * 300;
+      const delay = Math.min(baseDelay + jitter, totalDeadline - Date.now());
+
+      if (delay <= 0) {
+        break;
+      }
+
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  throw lastError || new Error('UPSTREAM_TOTAL_DEADLINE');
 }
 
 export default async function proxy(req, res) {
@@ -619,7 +673,7 @@ export default async function proxy(req, res) {
   let activeHeaders = fetchHeaders;
 
   try {
-    response = await safeRequest(activeUrl, activeHeaders, req?.signal);
+    response = await fetchWithBackoff(activeUrl, activeHeaders, req?.signal);
     statusCode = response.statusCode;
     responseHeaders = response.headers;
 
@@ -634,7 +688,7 @@ export default async function proxy(req, res) {
       activeHeaders = headers;
 
       try {
-        response = await safeRequest(activeUrl, activeHeaders, req?.signal);
+        response = await fetchWithBackoff(activeUrl, activeHeaders, req?.signal);
         statusCode = response.statusCode;
         responseHeaders = response.headers;
       } catch (fallbackErr) {
@@ -658,7 +712,7 @@ export default async function proxy(req, res) {
     };
 
     try {
-      response = await safeRequest(activeUrl, retryHeaders, req.signal);
+      response = await fetchWithBackoff(activeUrl, retryHeaders, req.signal);
       statusCode = response.statusCode;
       responseHeaders = response.headers;
     } catch (err) {
@@ -828,7 +882,7 @@ if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawB
               'cache-control': 'no-cache'
             };
 
-            const retryResponse = await safeRequest(activeUrl, retryHeaders, req.signal);
+            const retryResponse = await fetchWithBackoff(activeUrl, retryHeaders, req.signal);
             const retryBody = toBuffer(retryResponse.body);
 
             if (retryBody.length < 100) continue;
