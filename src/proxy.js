@@ -533,6 +533,40 @@ async function safeRequest(url, headers, signal, maxRedirects = 5) {
   throw err;
 }
 
+const RETRYABLE_CODES = new Set([
+  'ETIMEDOUT', 'ERR_GOT_REQUEST_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT', 'UPSTREAM_DEADLINE', 'ECONNRESET', 'UND_ERR_CONNECT_TIMEOUT'
+]);
+const RETRYABLE_STATUSES = new Set([502, 503, 504, 429, 520, 521, 522, 523, 524]);
+const MAX_RETRIES = safeInt(process.env.UPSTREAM_MAX_RETRIES, 2);
+
+async function fetchWithBackoff(url, headers, signal) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (signal?.aborted) throw new Error('ABORTED');
+
+    try {
+      const res = await safeRequest(url, headers, signal);
+      if (RETRYABLE_STATUSES.has(res.statusCode) && attempt < MAX_RETRIES) {
+        lastError = new Error(`RETRYABLE_STATUS_${res.statusCode}`);
+        lastError.code = `STATUS_${res.statusCode}`;
+      } else {
+        return res;
+      }
+    } catch (err) {
+      lastError = err;
+      if (!RETRYABLE_CODES.has(err.code) && attempt < MAX_RETRIES) throw err;
+    }
+
+    if (attempt < MAX_RETRIES) {
+      const baseDelay = 400 * Math.pow(2, attempt);
+      const jitter = Math.random() * 300;
+      await new Promise(r => setTimeout(r, baseDelay + jitter));
+    }
+  }
+  throw lastError || new Error('MAX_RETRIES_EXCEEDED');
+}
+
 export default async function proxy(req, res) {
   const startTime = Date.now();
   const reqId = req.id || 'unknown';
