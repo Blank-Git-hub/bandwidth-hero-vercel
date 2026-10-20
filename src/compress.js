@@ -935,6 +935,8 @@ export default async function compress(req, res, buffer, governor) {
   const { signal } = abortController;
   let clientDisconnected = false;
   const startedAt = Date.now();
+  const watchdog = {};
+  let phaseStart = Date.now();
 
   const timeoutHandle = setTimeout(() => {
     clientDisconnected = true;
@@ -1096,7 +1098,9 @@ const paramFingerprint = [
 
     let thumbResult = null;
     if ((ENABLE_VOID_WATCHER || ENABLE_PALETTE || ENABLE_PLACEHOLDER) && allowEnhancements) {
+      phaseStart = Date.now();
       thumbResult = await generatePlaceholderAndPalette(buffer);
+      watchdog.palette = Date.now() - phaseStart;
       if (ENABLE_VOID_WATCHER && thumbResult.isVoid) {
         res.setHeader('X-Void', 'TRUE');
         res.setHeader('Content-Type', `image/${format}`);
@@ -1161,7 +1165,9 @@ eventLoopLag = await measureEventLoopLag();
           meanLuminance: 128, stdevLuminance: 50, maxLuminance: 255
         };
       } else {
+        phaseStart = Date.now();
         analysis = await detectImageType(buffer, metadata);
+        watchdog.stats = Date.now() - phaseStart;
       }
       const viewportMaxDim = getViewportMaxDim(req);
 
@@ -1193,7 +1199,9 @@ eventLoopLag = await measureEventLoopLag();
       // FEATURE: Smart Alpha Channel Trimming detection
       let alphaBounds = null;
       if (ENABLE_ALPHA_TRIM && metadata.hasAlpha && !cpuPressure) {
+        phaseStart = Date.now();
         alphaBounds = await detectAlphaBounds(buffer, metadata);
+        watchdog.alpha = Date.now() - phaseStart;
         if (alphaBounds) {
           res.setHeader('X-Alpha-Trim', 'ACTIVE');
           res.setHeader('X-Alpha-Trim-Pad', `${alphaBounds.padLeft},${alphaBounds.padTop},${alphaBounds.padRight},${alphaBounds.padBottom}`);
@@ -1205,7 +1213,9 @@ eventLoopLag = await measureEventLoopLag();
    // Photos, anime, and colorful content produce false positives.
    let skewAngle = 0;
    if (ENABLE_DESKEW && allowEnhancements && analysis.isGrayscale && !isMangaMode && !isStripMode && !analysis.isMangaStrip && !analysis.isMangaPage && !analysis.isMangaWidePage) {
+     phaseStart = Date.now();
      skewAngle = await detectSkew(buffer);
+     watchdog.skew = Date.now() - phaseStart;
         if (skewAngle !== 0) {
           res.setHeader('X-Deskew-Angle', skewAngle.toFixed(2));
           recordMetric('deskew');
@@ -1231,13 +1241,17 @@ eventLoopLag = await measureEventLoopLag();
       // Halftone / moire detection
       let halftoneResult = null;
       if (ENABLE_MOIRE && allowEnhancements && !isStripMode) {
+        phaseStart = Date.now();
         halftoneResult = await detectHalftone(buffer, metadata, analysis);
+        watchdog.halftone = Date.now() - phaseStart;
       }
 
       // Line art detection
       let lineArtResult = null;
       if (ENABLE_LINE_DENOISE && allowLineArtFilters) {
+        phaseStart = Date.now();
         lineArtResult = await detectLineArt(buffer, analysis);
+        watchdog.line = Date.now() - phaseStart;
       }
 
       // Alpha sentinel
@@ -1545,8 +1559,9 @@ eventLoopLag = await measureEventLoopLag();
       // ENCODE
    let outputBuffer;
    let contentType;
-   const encodeStart = Date.now();
-   let encodeTime = 0;
+   phaseStart = Date.now();
+      const encodeStart = Date.now();
+      let encodeTime = 0;
       // Encode-level adaptive admission
       if (!concurrencyGovernor.tryAdmitEncode()) {
         res.status(503);
@@ -1639,6 +1654,7 @@ eventLoopLag = await measureEventLoopLag();
      const encodeEnd = Date.now();
      encodeTime = encodeEnd - encodeStart;
      finalEncodeTime = encodeTime;
+     watchdog.encode = encodeTime;
 
      activeEncodes--;
      concurrencyGovernor.releaseEncode({
@@ -1822,9 +1838,11 @@ eventLoopLag = await measureEventLoopLag();
         cpuLagMs: Math.round(eventLoopLag * 100) / 100,
         cpuPressureDisabledEnhancements: cpuPressure,
        enhancements: enhancementState,
-       appliedEnhancements
+       appliedEnhancements,
+       watchdog
      });
 
+      res.setHeader('X-Watchdog', Object.entries(watchdog).map(([k,v])=>`${k}:${v}ms`).join(','));
       res.setHeader('Content-Length', outputBuffer.length);
       return outputBuffer;
 
@@ -1846,7 +1864,7 @@ eventLoopLag = await measureEventLoopLag();
     }
 
     const safeMessage = err?.message ? String(err.message).split('?')[0] : 'Unknown compress error';
-    log.error({ reqId, error: safeMessage }, '[COMPRESS ERROR]');
+    log.error({ reqId, watchdog, error: safeMessage }, '[WATCHDOG_FATAL]');
     res.setHeader('X-Compression', 'FAILED');
 
     if (ENABLE_ORACLE_LEDGER) {
