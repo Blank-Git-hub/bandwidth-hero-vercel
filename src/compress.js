@@ -445,7 +445,8 @@ function detectHDRCharacteristics(metadata) {
 // ============================================================
 async function generatePlaceholderAndPalette(buffer) {
   try {
-    const { data, info } = await sharp(buffer)
+    // Prevent libvips deadlocks on extreme vertical strips by capping input pixels for thumbnailing
+    const { data, info } = await sharp(buffer, { limitInputPixels: 4_000_000 })
       .resize(32, 32, { fit: 'inside' })
       .raw()
       .toBuffer({ resolveWithObject: true });
