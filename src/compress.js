@@ -1472,18 +1472,6 @@ eventLoopLag = await measureEventLoopLag();
        resizeReason = 'PIXEL_COST';
      }
 
-     // Dimension limit resize.
-     if (origW > AVIF_MAX_DIMENSION || origH > AVIF_MAX_DIMENSION) {
-       const dimScale = Math.min(
-         AVIF_MAX_DIMENSION / origW,
-         AVIF_MAX_DIMENSION / origH
-       );
-       if (dimScale < scaleFactor) {
-         scaleFactor = dimScale;
-         resizeReason = 'DIMENSION';
-       }
-     }
-
      // Aspect ratio passthrough: extreme ratios cannot be fixed without cropping.
      // We preserve content and let the encoder handle it after dimension/pixel resize.
      const currentAspectRatio = Math.max(origW / Math.max(origH, 1), origH / Math.max(origW, 1));
