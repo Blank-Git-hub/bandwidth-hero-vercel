@@ -480,7 +480,7 @@ async function generatePlaceholderAndPalette(buffer) {
 
     let placeholder = null;
     if (ENABLE_PLACEHOLDER && !isVoid) {
-      const thumbBuffer = await sharp(buffer)
+      const thumbBuffer = await sharp(buffer, { limitInputPixels: 4_000_000 })
         .resize(32, 32, { fit: 'inside' })
         .blur(2)
         .grayscale()
@@ -807,7 +807,7 @@ async function detectImageType(buffer, metadata) {
     analysisHeight = Math.max(1, Math.round(analysisHeight * scale));
   }
 
-  let statsPipeline = sharp(buffer);
+  let statsPipeline = sharp(buffer, { limitInputPixels: 16_000_000 });
 
   if (analysisWidth < width || analysisHeight < height) {
     statsPipeline = statsPipeline.resize(analysisWidth, analysisHeight, {
