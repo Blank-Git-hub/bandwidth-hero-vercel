@@ -1558,6 +1558,13 @@ eventLoopLag = await measureEventLoopLag();
         return Buffer.alloc(0);
       }
 
+      // --- AVIF EFFORT SAFETY FOR MASSIVE STRIPS ---
+      // Prevents Vercel 60s hard-kills on tall manhwa strips by reducing libaom CPU effort
+      const stripAspectRatio = Math.max(origW, origH) / Math.max(Math.min(origW, origH), 1);
+      const isMassiveStrip = stripAspectRatio > 8 && totalPixelCost > 5_000_000;
+      const safeAvifEffort = isMassiveStrip ? Math.min(effort, 2) : effort;
+      if (isMassiveStrip) res.setHeader('X-AVIF-Effort-Capped', String(safeAvifEffort));
+      // --------------------------------------------
       // ENCODE
    let outputBuffer;
    let contentType;
@@ -1587,7 +1594,7 @@ eventLoopLag = await measureEventLoopLag();
               case 'avif':
                 outputBuffer = await pipeline.avif({
                   quality: Math.min(quality, 63),
-                  effort: Math.min(Math.max(effort, 0), 9),
+                  effort: Math.min(Math.max(safeAvifEffort, 0), 9),
                   chromaSubsampling: getChromaSubsampling(analysis),
                 }).toBuffer();
                 contentType = 'image/avif';
