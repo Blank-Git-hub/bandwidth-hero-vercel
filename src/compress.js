@@ -213,77 +213,6 @@ const exactCache = new LRUCache({
 });
 
 // ============================================================
-// CHRONOS v2
-// ============================================================
-const CHRONOS_WINDOW = 10;
-const CHRONOS_MIN_PIXELS = safeInt(process.env.CHRONOS_MIN_PIXELS, 1_000_000);
-const rollingByFormat = { avif: [], webp: [] };
-
-function recordEncodeTime(ms, pixelCount, format) {
-  if (format !== 'avif' && format !== 'webp') return;
-  if (!Number.isFinite(ms) || ms <= 0) return;
-  if (!Number.isFinite(pixelCount) || pixelCount <= 0) pixelCount = 1;
-
-  // Skip tiny images — their ms/MP ratio is unreliable and pollutes the average
-  if (pixelCount < CHRONOS_MIN_PIXELS) return;
-
-  const mp = pixelCount / 1_000_000;
-  const msPerMegapixel = ms / Math.max(mp, 0.1);
-  if (!rollingByFormat[format]) rollingByFormat[format] = [];
-  rollingByFormat[format].push(msPerMegapixel);
-  if (rollingByFormat[format].length > CHRONOS_WINDOW) {
-    rollingByFormat[format].shift();
-  }
-}
-
-function getAverageMsPerMegapixel(format) {
-  const arr = rollingByFormat[format] || [];
-  if (arr.length === 0) return 0;
-  return arr.reduce((a, b) => a + b, 0) / arr.length;
-}
-
-function getColdStartEffort(pixelCount, outputFormat) {
-  const mp = pixelCount / 1_000_000;
-  if (outputFormat === 'avif') {
-    if (mp <= 1) return 6;
-    if (mp <= 3) return 5;
-    if (mp <= 6) return 4;
-    if (mp <= 10) return 3;
-    if (mp <= 18) return 2;
-    return 2;
-  }
-  if (outputFormat === 'webp') {
-    if (mp <= 2) return 6;
-    if (mp <= 8) return 5;
-    if (mp <= 20) return 4;
-    return 2;
-  }
-  return 4;
-}
-
-function getChronosState(pixelCount, outputFormat) {
-  const samples = rollingByFormat[outputFormat] || [];
-  if (samples.length < 3) {
-    return { state: 'COLD', effort: getColdStartEffort(pixelCount, outputFormat) };
-  }
-  const avg = getAverageMsPerMegapixel(outputFormat);
-  if (outputFormat === 'avif') {
-    if (avg < 300) return { state: 'FAST', effort: 9 };
-    if (avg < 1200) return { state: 'NORMAL', effort: 7 };
-    if (avg < 5000) return { state: 'MODERATE', effort: 5 };
-    if (avg < 12000) return { state: 'SEVERE', effort: 3 };
-    return { state: 'CRITICAL', effort: 2 };
-  }
-  if (outputFormat === 'webp') {
-    if (avg < 50) return { state: 'SWIFT', effort: 6 };
-    if (avg < 200) return { state: 'LIGHT', effort: 5 };
-    if (avg < 800) return { state: 'HEAVY', effort: 3 };
-    return { state: 'SEVERE', effort: 2 };
-  }
-  return { state: 'NORMAL', effort: 4 };
-}
-
-// ============================================================
 // FEATURE FLAGS
 // ============================================================
 
@@ -967,10 +896,21 @@ export default async function compress(req, res, buffer, governor) {
   const watchdog = {};
   let phaseStart = Date.now();
 
-  const timeoutHandle = setTimeout(() => {
-    clientDisconnected = true;
-    abortController.abort(new Error('SHARP_HARD_TIMEOUT'));
-  }, SHARP_HARD_TIMEOUT_MS);
+  const initialDeadline = adaptiveDirector.getEncodeBudget({
+  startedAt: req.proxyStartedAt || startedAt
+});
+
+const hardTimeoutMs = Math.max(
+  250,
+  Math.min(SHARP_HARD_TIMEOUT_MS, Math.floor(initialDeadline.remainingMs))
+);
+
+res.setHeader('X-Sharp-Hard-Timeout', String(hardTimeoutMs));
+
+const timeoutHandle = setTimeout(() => {
+  clientDisconnected = true;
+  abortController.abort(new Error('SHARP_HARD_TIMEOUT'));
+}, hardTimeoutMs);
 
   if (ENABLE_TIMEOUT_GUILLOTINE) {
     req.on('close', () => {
@@ -1024,11 +964,27 @@ let eventLoopLag;
     const frames = metadata.pages || 1;
     const width = metadata.width || 0;
     const height = metadata.height || 0;
-    totalPixelCost = width * height * frames;
+    const metadataChannels = Math.max(
+  1,
+  Number(metadata.channels) || (metadata.hasAlpha ? 4 : 3)
+);
+
+const metadataDepth = String(metadata.depth || 'uchar').toLowerCase();
+
+const bytesPerChannel =
+  metadataDepth === 'float' || metadataDepth === 'double'
+    ? 4
+    : metadataDepth === 'ushort' || metadataDepth === 'uint'
+      ? 2
+      : 1;
+
+const bytesPerPixel = Math.max(3, metadataChannels * bytesPerChannel);
+const pixelWeight = Math.max(1, bytesPerPixel / 6);
+
+totalPixelCost = Math.ceil(width * height * frames * pixelWeight);
 
     const formatDecision = chooseOutputFormat(metadata, totalPixelCost);
     const outputFormat = formatDecision.format;
-    const chronos = getChronosState(totalPixelCost, outputFormat);
 
     let logUrl = 'unknown';
  try {
@@ -1152,6 +1108,14 @@ const paramFingerprint = [
     if (ENABLE_ORACLE_LEDGER) metrics.cacheMisses++;
 
     if (!memGov.admitPixels(totalPixelCost)) {
+  adaptiveDirector.recordRejection({
+    format: outputFormat,
+    width,
+    height,
+    frames,
+    pixelCost: totalPixelCost
+  });
+
   res.status(503);
   res.setHeader('X-Memory-Governor', 'REJECTED');
   res.setHeader('Retry-After', '5');
@@ -1522,47 +1486,67 @@ if (adaptive.risk === 'budget_exceeded') {
 }
 
       // Resize
-      let targetWidth = null;
-      let targetHeight = null;
+let targetWidth = null;
+let targetHeight = null;
 
-      const origW = alphaBounds ? alphaBounds.width : width;
-      const origH = alphaBounds ? alphaBounds.height : height;
-      // Apply watchdog shrink if budget was exceeded
-      const watchdogW = Math.round(origW * watchdogScaleFactor);
-      const watchdogH = Math.round(origH * watchdogScaleFactor);
+const origW = alphaBounds ? alphaBounds.width : width;
+const origH = alphaBounds ? alphaBounds.height : height;
 
-      const effectiveStripWidth = (req.opts?.maxStripWidth > 0) ? req.opts.maxStripWidth : MAX_STRIP_WIDTH;
-      const effectiveMaxDim = (req.opts?.maxDim > 0) ? req.opts.maxDim : viewportMaxDim;
+const baseW = Math.max(1, Math.round(origW * watchdogScaleFactor));
+const baseH = Math.max(1, Math.round(origH * watchdogScaleFactor));
 
-      if (analysis.isMangaStrip) {
-        if (effectiveStripWidth > 0 && origW > effectiveStripWidth) {
-          targetWidth = effectiveStripWidth;
-        }
-      } else {
-        if (effectiveMaxDim > 0 && (origW > effectiveMaxDim || origH > effectiveMaxDim)) {
-          const scale = Math.min(effectiveMaxDim / origW, effectiveMaxDim / origH);
-          targetWidth = Math.round(origW * scale);
-          targetHeight = Math.round(origH * scale);
-        }
-      }
+const effectiveStripWidth = (req.opts?.maxStripWidth > 0)
+  ? req.opts.maxStripWidth
+  : MAX_STRIP_WIDTH;
+
+const effectiveMaxDim = (req.opts?.maxDim > 0)
+  ? req.opts.maxDim
+  : viewportMaxDim;
+
+if (analysis.isMangaStrip) {
+  if (effectiveStripWidth > 0 && baseW > effectiveStripWidth) {
+    targetWidth = effectiveStripWidth;
+  }
+} else {
+  if (effectiveMaxDim > 0 && (baseW > effectiveMaxDim || baseH > effectiveMaxDim)) {
+    const scale = Math.min(effectiveMaxDim / baseW, effectiveMaxDim / baseH);
+    targetWidth = Math.round(baseW * scale);
+    targetHeight = Math.round(baseH * scale);
+  }
+}
 
       // Layout prophet headers
       if (ENABLE_LAYOUT_PROPHET) {
-        let outW = origW, outH = origH;
-        if (targetWidth && targetHeight) { outW = targetWidth; outH = targetHeight; }
-        else if (targetWidth) { outW = targetWidth; outH = Math.round(origH * (targetWidth / origW)); }
-        else if (targetHeight) { outH = targetHeight; outW = Math.round(origW * (targetHeight / origH)); }
+  let outW = baseW;
+  let outH = baseH;
 
-        res.setHeader('X-Output-Width', String(outW));
-        res.setHeader('X-Output-Height', String(outH));
-        res.setHeader('X-Aspect-Ratio', (outW / outH).toFixed(4));
-        res.setHeader('X-Orientation', outW > outH ? 'landscape' : outH > outW ? 'portrait' : 'square');
-      }
+  if (targetWidth && targetHeight) {
+    outW = targetWidth;
+    outH = targetHeight;
+  } else if (targetWidth) {
+    outW = targetWidth;
+    outH = Math.round(baseH * (targetWidth / baseW));
+  } else if (targetHeight) {
+    outH = targetHeight;
+    outW = Math.round(baseW * (targetHeight / baseH));
+  }
+
+  res.setHeader('X-Output-Width', String(outW));
+  res.setHeader('X-Output-Height', String(outH));
+  res.setHeader('X-Aspect-Ratio', (outW / Math.max(outH, 1)).toFixed(4));
+  res.setHeader('X-Orientation', outW > outH ? 'landscape' : outH > outW ? 'portrait' : 'square');
+}
 
       // Forced AVIF resize: handle pixel cost, dimension limits, and aspect ratio.
-   if (outputFormat === 'avif') {
-     let scaleFactor = 1;
-     let resizeReason = '';
+   if (scaleFactor < 1) {
+  const currentW = targetWidth || baseW;
+  const currentH = targetHeight || baseH;
+
+  targetWidth = Math.round(currentW * scaleFactor);
+  targetHeight = Math.round(currentH * scaleFactor);
+
+  res.setHeader('X-AVIF-Resize-To-Fit', resizeReason);
+}
 
      // Pixel cost resize.
      if (totalPixelCost > AVIF_MAX_PIXELS) {
@@ -1664,12 +1648,20 @@ if (adaptive.risk === 'budget_exceeded') {
       let encodeTime = 0;
       // Encode-level adaptive admission
       if (!concurrencyGovernor.tryAdmitEncode()) {
-        res.status(503);
-        res.setHeader('X-Adaptive-Concurrency', 'ENCODE_REJECTED');
-        res.setHeader('X-Adaptive-Encode-Limit', String(concurrencyGovernor.getStatus().encode.limit));
-        res.setHeader('Retry-After', '3');
-        return Buffer.alloc(0);
-      }
+  adaptiveDirector.recordRejection({
+    format: outputFormat,
+    width,
+    height,
+    frames,
+    pixelCost: totalPixelCost
+  });
+
+  res.status(503);
+  res.setHeader('X-Adaptive-Concurrency', 'ENCODE_REJECTED');
+  res.setHeader('X-Adaptive-Encode-Limit', String(concurrencyGovernor.getStatus().encode.limit));
+  res.setHeader('Retry-After', '3');
+  return Buffer.alloc(0);
+}
 
       res.setHeader('X-Adaptive-Encode-Active', String(concurrencyGovernor.getStatus().encode.active));
 
@@ -1930,7 +1922,6 @@ if (adaptive.risk === 'budget_exceeded') {
         format: outputFormat,
         quality,
         effort,
-        chronosState: chronos.state,
         grade: judgeResult ? judgeResult.grade : null,
         score: judgeResult ? judgeResult.score : null,
         inputBytes: buffer.length,
