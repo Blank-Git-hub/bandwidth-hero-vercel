@@ -1991,7 +1991,9 @@ if (analysis.isMangaStrip) {
     }
 
     if (!res.headersSent && !res.writableEnded) {
-      res.setHeader('Content-Type', `image/${req.opts?.originType || 'jpeg'}`);
+      const fallbackType = req.opts?.originType || 'image/jpeg';
+      const safeType = fallbackType.startsWith('image/') ? fallbackType : `image/${fallbackType}`;
+      res.setHeader('Content-Type', safeType);
       res.end(buffer);
     } else {
       req.socket?.destroy();
