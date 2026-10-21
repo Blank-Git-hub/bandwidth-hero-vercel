@@ -1608,10 +1608,16 @@ eventLoopLag = await measureEventLoopLag();
 
       // --- AVIF EFFORT SAFETY FOR MASSIVE STRIPS ---
       // Prevents Vercel 60s hard-kills on tall manhwa strips by reducing libaom CPU effort
-      const stripAspectRatio = Math.max(origW, origH) / Math.max(Math.min(origW, origH), 1);
-      const isMassiveStrip = stripAspectRatio > 8 && totalPixelCost > 5_000_000;
-      const safeAvifEffort = isMassiveStrip ? Math.min(effort, 2) : effort;
-      if (isMassiveStrip) res.setHeader('X-AVIF-Effort-Capped', String(safeAvifEffort));
+      const adaptiveCeiling = adaptiveDirector.getEffortCeiling({
+        format: outputFormat,
+        bucket: adaptive.bucket
+      });
+
+      const safeEncodeEffort = Math.min(effort, adaptiveCeiling);
+
+      if (safeEncodeEffort !== effort) {
+        res.setHeader('X-Adaptive-Ceiling-Applied', String(safeEncodeEffort));
+      }
       // --------------------------------------------
       // ENCODE
    let outputBuffer;
@@ -1642,7 +1648,7 @@ eventLoopLag = await measureEventLoopLag();
               case 'avif':
                 outputBuffer = await pipeline.avif({
                   quality: Math.min(quality, 63),
-                  effort: Math.min(Math.max(safeAvifEffort, 0), 9),
+                  effort: Math.min(Math.max(safeEncodeEffort, 0), 9),
                   chromaSubsampling: getChromaSubsampling(analysis),
                 }).toBuffer();
                 contentType = 'image/avif';
@@ -1650,7 +1656,7 @@ eventLoopLag = await measureEventLoopLag();
               case 'webp':
                 outputBuffer = await pipeline.webp({
                   quality,
-                  effort: Math.min(Math.max(effort, 0), 6),
+                  effort: Math.min(Math.max(safeEncodeEffort, 0), 6),
                   smartSubsample: true,
                   preset: getWebpPreset(analysis, lineArtResult, origW, origH),
                 }).toBuffer();
@@ -1678,7 +1684,7 @@ eventLoopLag = await measureEventLoopLag();
             case 'avif':
               outputBuffer = await pipeline.avif({
                 quality: Math.min(quality, 63),
-                effort: Math.min(Math.max(effort, 0), 9),
+                effort: Math.min(Math.max(safeEncodeEffort, 0), 9),
                 chromaSubsampling: getChromaSubsampling(analysis),
               }).toBuffer();
               contentType = 'image/avif';
@@ -1686,7 +1692,7 @@ eventLoopLag = await measureEventLoopLag();
             case 'webp':
               outputBuffer = await pipeline.webp({
                 quality,
-                effort: Math.min(Math.max(effort, 0), 6),
+                effort: Math.min(Math.max(safeEncodeEffort, 0), 6),
                 smartSubsample: true,
                 preset: getWebpPreset(analysis, lineArtResult, origW, origH),
               }).toBuffer();
@@ -1727,7 +1733,7 @@ eventLoopLag = await measureEventLoopLag();
      height: origH,
      frames,
      pixelCost: totalPixelCost,
-     effort: typeof safeAvifEffort !== 'undefined' ? safeAvifEffort : effort,
+     effort: typeof safeEncodeEffort !== 'undefined' ? safeEncodeEffort : effort,
      encodeMs: encodeTime,
      success: !clientDisconnected && !signal.aborted,
      timedOut: signal.aborted
