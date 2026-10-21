@@ -11,16 +11,31 @@ const MIN_ENCODE_MS = safeInt(process.env.ADAPTIVE_MIN_ENCODE_MS, 4000);
 const ROLLING_WINDOW = safeInt(process.env.ADAPTIVE_ROLLING_WINDOW, 20);
 const MIN_SAMPLES = safeInt(process.env.ADAPTIVE_MIN_SAMPLES, 3);
 
-const FORMAT_MAX_EFFORT = {
-  avif: 9,
-  webp: 6,
-  jpeg: 0
-};
-
-const BASELINE_EFFORT = {
-  avif: 4,
-  webp: 4,
-  jpeg: 0
+const EFFORT_CEILINGS = {
+  avif: {
+    tiny: 9,
+    normal: 9,
+    portrait: 8,
+    strip: 5,
+    extreme_strip: 3,
+    animated: 5
+  },
+  webp: {
+    tiny: 6,
+    normal: 6,
+    portrait: 5,
+    strip: 4,
+    extreme_strip: 3,
+    animated: 4
+  },
+  jpeg: {
+    tiny: 0,
+    normal: 0,
+    portrait: 0,
+    strip: 0,
+    extreme_strip: 0,
+    animated: 0
+  }
 };
 
 const AVIF_EFFORT_FACTOR = [
@@ -104,7 +119,9 @@ function effortFactor(format, effort) {
   return 1;
 }
 
-export function classifyGeometry({ width = 0, height = 0, frames = 1, pixelCost = 0 } = {}) {
+export function getEffortCeiling({ format = 'avif', bucket = 'normal' } = {}) {
+  return EFFORT_CEILINGS[format]?.[bucket] ?? FORMAT_MAX_EFFORT[format] ?? 0;
+}
   if ((frames || 1) > 1) {
     return 'animated';
   }
@@ -229,14 +246,17 @@ export function chooseEffort({
 } = {}) {
   const maxFormatEffort = FORMAT_MAX_EFFORT[format] ?? 0;
 
+  const maxFormatEffort = FORMAT_MAX_EFFORT[format] ?? 0;
+  const bucket = classifyGeometry({ width, height, frames, pixelCost });
+  const ceiling = getEffortCeiling({ format, bucket });
+
   const max = Math.min(
     Number.isFinite(maxEffort) ? maxEffort : maxFormatEffort,
-    maxFormatEffort
+    maxFormatEffort,
+    ceiling
   );
 
   const min = Math.max(0, Math.min(Number.isFinite(minEffort) ? minEffort : 0, max));
-
-  const bucket = classifyGeometry({ width, height, frames, pixelCost });
 
   let chosenEffort = min;
   let predictedMs = predictEncodeMs({
@@ -369,6 +389,7 @@ export function resetStats() {
 
 export default {
   classifyGeometry,
+  getEffortCeiling,
   getEncodeBudget,
   predictEncodeMs,
   chooseEffort,
