@@ -88,6 +88,18 @@ const DEFAULT_MS_PER_MP = {
   }
 };
 
+const FORMAT_MAX_EFFORT = {
+  avif: 9,
+  webp: 6,
+  jpeg: 0
+};
+
+const BASELINE_EFFORT = {
+  avif: 4,
+  webp: 4,
+  jpeg: 0
+};
+
 const stats = new Map();
 
 function statsKey(format, bucket) {
@@ -122,6 +134,8 @@ function effortFactor(format, effort) {
 export function getEffortCeiling({ format = 'avif', bucket = 'normal' } = {}) {
   return EFFORT_CEILINGS[format]?.[bucket] ?? FORMAT_MAX_EFFORT[format] ?? 0;
 }
+
+export function classifyGeometry({ width = 0, height = 0, frames = 1, pixelCost = 0 } = {}) {
   if ((frames || 1) > 1) {
     return 'animated';
   }
@@ -245,8 +259,6 @@ export function chooseEffort({
   minEffort = 0
 } = {}) {
   const maxFormatEffort = FORMAT_MAX_EFFORT[format] ?? 0;
-
-  const maxFormatEffort = FORMAT_MAX_EFFORT[format] ?? 0;
   const bucket = classifyGeometry({ width, height, frames, pixelCost });
   const ceiling = getEffortCeiling({ format, bucket });
 
@@ -308,9 +320,9 @@ export function recordEncode({
   success = true,
   timedOut = false
 } = {}) {
-  if (!FORMAT_MAX_EFFORT[format]) {
-    return;
-  }
+  if (!Object.prototype.hasOwnProperty.call(FORMAT_MAX_EFFORT, format)) {
+  return;
+}
 
   const bucket = classifyGeometry({ width, height, frames, pixelCost });
   const key = statsKey(format, bucket);
