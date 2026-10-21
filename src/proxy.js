@@ -987,7 +987,3 @@ if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawB
     }
   }
 }
-    log.error({ reqId, error: sanitizeError(error) }, '[PROXY ERROR]');
-    return sendGhost(res, 60, null, 'proxy_error');
-  }
-}
