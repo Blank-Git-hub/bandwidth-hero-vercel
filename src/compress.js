@@ -405,8 +405,8 @@ function detectHDRCharacteristics(metadata) {
 // ============================================================
 async function generatePlaceholderAndPalette(buffer) {
   try {
-    // Prevent libvips deadlocks on extreme vertical strips by capping input pixels for thumbnailing
-    const { data, info } = await sharp(buffer, { limitInputPixels: 4_000_000 })
+    // Allow sharp to use shrink-on-load for extreme vertical strips
+    const { data, info } = await sharp(buffer, { limitInputPixels: 0 })
       .resize(32, 32, { fit: 'inside' })
       .raw()
       .toBuffer({ resolveWithObject: true });
@@ -767,7 +767,7 @@ async function detectImageType(buffer, metadata) {
     analysisHeight = Math.max(1, Math.round(analysisHeight * scale));
   }
 
-  let statsPipeline = sharp(buffer, { limitInputPixels: 16_000_000 });
+  let statsPipeline = sharp(buffer, { limitInputPixels: 0 });
 
   if (analysisWidth < width || analysisHeight < height) {
     statsPipeline = statsPipeline.resize(analysisWidth, analysisHeight, {
