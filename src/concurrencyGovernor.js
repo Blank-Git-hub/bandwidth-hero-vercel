@@ -217,7 +217,7 @@ function releaseEncode(outcome = {}) {
   // INCREASE: healthy encodes
   encodeHealthyStreak++;
 
-  if (encodeHealthyStreak >= HEALTHY_WINDOW && encodeActive >= encodeLimit) {
+  if (encodeHealthyStreak >= HEALTHY_WINDOW && encodeActive >= encodeLimit - 1) {
     const newLimit = Math.min(ENCODE_MAX_LIMIT, encodeLimit + 1);
     if (newLimit > encodeLimit) {
       encodeLimit = newLimit;
