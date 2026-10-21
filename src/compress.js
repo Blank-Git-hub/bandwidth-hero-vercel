@@ -47,8 +47,11 @@ const SHUTDOWN_TIMEOUT = safeInt(process.env.SHUTDOWN_TIMEOUT, 10000);
 const SHARP_HARD_TIMEOUT_MS = safeInt(process.env.SHARP_HARD_TIMEOUT_MS, 50000);
 
 const AVIF_MAX_PIXELS = safeInt(process.env.AVIF_MAX_PIXELS, 50_000_000);
-const AVIF_MAX_DIMENSION = 16383;
-const AVIF_MAX_ASPECT_RATIO = 200;
+const AVIF_MAX_DIMENSION = safeInt(process.env.AVIF_MAX_DIMENSION, 16383);
+const AVIF_MAX_ASPECT_RATIO = safeInt(process.env.AVIF_MAX_ASPECT_RATIO, 200);
+const MIN_AVIF_RESIZED_DIMENSION = safeInt(process.env.MIN_AVIF_RESIZED_DIMENSION, 600);
+const ENABLE_AVIF_EXTREME_FALLBACK = envBool('ENABLE_AVIF_EXTREME_FALLBACK', true);
+const AVIF_LIMIT_RESIZE_QUALITY_BOOST = safeInt(process.env.AVIF_LIMIT_RESIZE_QUALITY_BOOST, 8);
 
 const ANALYSIS_MAX_DIM = safeInt(process.env.ANALYSIS_MAX_DIM, 4096);
 const ANALYSIS_MAX_PIXELS = safeInt(process.env.ANALYSIS_MAX_PIXELS, 16_000_000);
@@ -830,6 +833,24 @@ function getChromaSubsampling(analysis) {
   return '4:2:0';
 }
 
+function getAvifLimitScale(width, height, totalPixelCost) {
+  let scale = 1;
+
+  const w = Math.max(1, Number(width) || 1);
+  const h = Math.max(1, Number(height) || 1);
+  const maxDimension = Math.max(w, h);
+
+  if (maxDimension > AVIF_MAX_DIMENSION) {
+    scale = Math.min(scale, AVIF_MAX_DIMENSION / maxDimension);
+  }
+
+  if (totalPixelCost > AVIF_MAX_PIXELS) {
+    scale = Math.min(scale, Math.sqrt(AVIF_MAX_PIXELS / totalPixelCost));
+  }
+
+  return scale;
+}
+
 function chooseOutputFormat(metadata, totalPixelCost) {
   const isAnimated = (metadata.pages || 1) > 1;
   const format = metadata.format;
@@ -845,14 +866,30 @@ function chooseOutputFormat(metadata, totalPixelCost) {
     return { format: 'avif', reason: 'unknown_dimensions_force_avif' };
   }
 
-  // Always AVIF. Resize handles oversized images.
-  if (totalPixelCost <= AVIF_MAX_PIXELS) {
+  // HARD LIMIT: AVIF/WebP cannot encode dimensions > 16383px.
+  // Force JPEG immediately to prevent encoder crashes.
+  if (width > AVIF_MAX_DIMENSION || height > AVIF_MAX_DIMENSION) {
+    return { format: 'jpeg', reason: 'extreme_dimension_force_jpeg' };
+  }
+
+  // SOFT FALLBACK: If AVIF resize would make the short side too small, use JPEG.
+  const limitScale = getAvifLimitScale(width, height, totalPixelCost);
+
+  if (ENABLE_AVIF_EXTREME_FALLBACK && limitScale < 1) {
+    const minDimension = Math.min(width, height);
+    const projectedMinDimension = Math.floor(minDimension * limitScale);
+
+    if (projectedMinDimension < MIN_AVIF_RESIZED_DIMENSION) {
+      return { format: 'jpeg', reason: 'avif_extreme_dimension_fallback' };
+    }
+  }
+
+  if (limitScale >= 1) {
     return { format: 'avif', reason: 'avif_allowed' };
   }
 
   return { format: 'avif', reason: 'avif_resized_to_fit' };
 }
-
 // ============================================================
 // MAIN COMPRESS FUNCTION
 // ============================================================
@@ -985,6 +1022,12 @@ totalPixelCost = Math.ceil(width * height * frames * pixelWeight);
 
     const formatDecision = chooseOutputFormat(metadata, totalPixelCost);
     const outputFormat = formatDecision.format;
+
+    const avifLimitScale = outputFormat === 'avif'
+      ? getAvifLimitScale(width, height, totalPixelCost)
+      : 1;
+
+    const avifLimitResize = avifLimitScale < 1;
 
     let logUrl = 'unknown';
  try {
@@ -1314,6 +1357,12 @@ eventLoopLag = await measureEventLoopLag();
         quality = Math.min(95, quality + TEXT_QUALITY_BOOST);
         res.setHeader('X-Text-Quality-Boost', `+${TEXT_QUALITY_BOOST}`);
       }
+
+      // AVIF limit resize quality boost
+      if (outputFormat === 'avif' && avifLimitResize) {
+        quality = Math.min(63, quality + AVIF_LIMIT_RESIZE_QUALITY_BOOST);
+        res.setHeader('X-AVIF-Resize-Quality-Boost', `+${AVIF_LIMIT_RESIZE_QUALITY_BOOST}`);
+      }
       
       const frameCount = metadata.pages || 1;
    if (isAnimated && frameCount > MAX_ANIMATION_FRAMES) {
@@ -1585,11 +1634,13 @@ if (analysis.isMangaStrip) {
      });
    }
 
-      // Sharpen - boosted for text images
+      // Sharpen - boosted for text images and AVIF limit resizes
       const contentWantsSharpen =
         sharpenPreference !== false &&
-        (analysis.sharpness < 50 || isTextHeavy || analysis.isMangaWidePage) &&
-        !analysis.isMangaStrip;
+        (
+          ((analysis.sharpness < 50 || isTextHeavy || analysis.isMangaWidePage) && !analysis.isMangaStrip) ||
+          (avifLimitResize && analysis.isMangaStrip)
+        );
 
       if (allowEnhancements && (sharpenPreference === true || contentWantsSharpen)) {
         const alreadySharpened = allowLineArtFilters && lineArtResult &&
@@ -1689,16 +1740,23 @@ if (analysis.isMangaStrip) {
                 break;
               case 'jpeg':
               default:
+                const isExtremeJpeg = width > AVIF_MAX_DIMENSION || height > AVIF_MAX_DIMENSION;
+                const jpegQuality = isExtremeJpeg ? Math.min(quality, 75) : quality;
+                const jpegChroma = isExtremeJpeg ? '4:2:0' : getChromaSubsampling(analysis);
+
                 outputBuffer = await pipeline.jpeg({
-                  quality,
+                  quality: jpegQuality,
                   progressive: true,
                   mozjpeg: true,
-                  chromaSubsampling: getChromaSubsampling(analysis),
+                  chromaSubsampling: jpegChroma,
                   trellisQuantisation: true,
                   overshootDeringing: true,
                   optimiseScans: true,
                 }).toBuffer();
                 contentType = 'image/jpeg';
+                if (isExtremeJpeg) {
+                  res.setHeader('X-Extreme-JPEG', 'OPTIMIZED');
+                }
                 break;
             }
           } finally {
@@ -1724,18 +1782,25 @@ if (analysis.isMangaStrip) {
               contentType = 'image/webp';
               break;
             case 'jpeg':
-            default:
-              outputBuffer = await pipeline.jpeg({
-                quality,
-                progressive: true,
-                mozjpeg: true,
-                chromaSubsampling: getChromaSubsampling(analysis),
-                trellisQuantisation: true,
-                overshootDeringing: true,
-                optimiseScans: true,
-              }).toBuffer();
-              contentType = 'image/jpeg';
-              break;
+              default:
+                const isExtremeJpeg = width > AVIF_MAX_DIMENSION || height > AVIF_MAX_DIMENSION;
+                const jpegQuality = isExtremeJpeg ? Math.min(quality, 75) : quality;
+                const jpegChroma = isExtremeJpeg ? '4:2:0' : getChromaSubsampling(analysis);
+
+                outputBuffer = await pipeline.jpeg({
+                  quality: jpegQuality,
+                  progressive: true,
+                  mozjpeg: true,
+                  chromaSubsampling: jpegChroma,
+                  trellisQuantisation: true,
+                  overshootDeringing: true,
+                  optimiseScans: true,
+                }).toBuffer();
+                contentType = 'image/jpeg';
+                if (isExtremeJpeg) {
+                  res.setHeader('X-Extreme-JPEG', 'OPTIMIZED');
+                }
+                break;
           }
         }
       } finally {
