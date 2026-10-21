@@ -1482,6 +1482,9 @@ eventLoopLag = await measureEventLoopLag();
 
       const origW = alphaBounds ? alphaBounds.width : width;
       const origH = alphaBounds ? alphaBounds.height : height;
+      // Apply watchdog shrink if budget was exceeded
+      const watchdogW = Math.round(origW * watchdogScaleFactor);
+      const watchdogH = Math.round(origH * watchdogScaleFactor);
 
       const effectiveStripWidth = (req.opts?.maxStripWidth > 0) ? req.opts.maxStripWidth : MAX_STRIP_WIDTH;
       const effectiveMaxDim = (req.opts?.maxDim > 0) ? req.opts.maxDim : viewportMaxDim;
@@ -1543,8 +1546,8 @@ eventLoopLag = await measureEventLoopLag();
      }
 
      if (scaleFactor < 1) {
-       targetWidth = Math.round(origW * scaleFactor);
-       targetHeight = Math.round(origH * scaleFactor);
+       targetWidth = Math.round(watchdogW * scaleFactor);
+        targetHeight = Math.round(watchdogH * scaleFactor);
        res.setHeader('X-AVIF-Resize-To-Fit', resizeReason);
      }
    }
@@ -1613,11 +1616,39 @@ eventLoopLag = await measureEventLoopLag();
         bucket: adaptive.bucket
       });
 
-      const safeEncodeEffort = Math.min(effort, adaptiveCeiling);
+      let safeEncodeEffort = Math.min(effort, adaptiveCeiling);
 
       if (safeEncodeEffort !== effort) {
         res.setHeader('X-Adaptive-Ceiling-Applied', String(safeEncodeEffort));
       }
+
+      // --- COMPRESS OR SHRINK WATCHDOG ---
+      // If AdaptiveDirector predicts budget_exceeded, force minimum effort.
+      // If still over budget, shrink dimensions to fit.
+      let watchdogScaleFactor = 1;
+
+      if (adaptive.risk === 'budget_exceeded') {
+        safeEncodeEffort = 0;
+        res.setHeader('X-Watchdog', 'EFFORT_FORCED_0');
+
+        const effortZeroPrediction = adaptiveDirector.predictEncodeMs({
+          format: outputFormat,
+          width,
+          height,
+          frames,
+          pixelCost: totalPixelCost,
+          effort: 0,
+          pressure: adaptivePressure
+        });
+
+        if (effortZeroPrediction > budget.budgetMs) {
+          // Still over budget. Shrink dimensions to fit.
+          watchdogScaleFactor = Math.sqrt(budget.budgetMs / effortZeroPrediction);
+          watchdogScaleFactor = Math.max(0.25, Math.min(watchdogScaleFactor, 1));
+          res.setHeader('X-Watchdog', `SHRINK_${Math.round(watchdogScaleFactor * 100)}%`);
+        }
+      }
+      // -----------------------------------
       // --------------------------------------------
       // ENCODE
    let outputBuffer;
@@ -1930,7 +1961,9 @@ eventLoopLag = await measureEventLoopLag();
          pressure: adaptivePressure,
          eventLoopLagMs: eventLoopLag,
          activeEncodes,
-         memoryPressure: memoryGovernor.isUnderPressure()
+         memoryPressure: memoryGovernor.isUnderPressure(),
+         watchdogScaleFactor: watchdogScaleFactor,
+         finalEffort: safeEncodeEffort
        }
      });
       
