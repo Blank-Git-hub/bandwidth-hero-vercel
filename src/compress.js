@@ -1972,18 +1972,18 @@ eventLoopLag = await measureEventLoopLag();
       return outputBuffer;
 
     } finally {
-  if (pixelsAdmitted) {
-    memGov.releasePixels(totalPixelCost);
-    pixelsAdmitted = false;
-  }
-}
+      if (pixelsAdmitted) {
+        memGov.releasePixels(totalPixelCost);
+        pixelsAdmitted = false;
+      }
+    }
   } catch (err) {
     if (clientDisconnected || signal.aborted) {
       log.warn({
-      reqId,
-      encodeTimeMs: Date.now() - startedAt,
-      pixelCost: totalPixelCost
-    }, '[CLIENT_DISCONNECT] Client aborted connection');
+        reqId,
+        encodeTimeMs: Date.now() - startedAt,
+        pixelCost: totalPixelCost
+      }, '[CLIENT_DISCONNECT] Client aborted connection');
       res.setHeader('X-Timeout-Guillotine', 'ABORTED');
       return Buffer.alloc(0);
     }
@@ -2005,19 +2005,19 @@ eventLoopLag = await measureEventLoopLag();
     }
     return null;
   } finally {
-  if (timeoutHandle) clearTimeout(timeoutHandle);
+    if (timeoutHandle) clearTimeout(timeoutHandle);
 
-  if (pixelsAdmitted) {
-    memGov.releasePixels(totalPixelCost);
-    pixelsAdmitted = false;
+    if (pixelsAdmitted) {
+      memGov.releasePixels(totalPixelCost);
+      pixelsAdmitted = false;
+    }
+
+    activeRequests--;
+    concurrencyGovernor.release({
+      success: !clientDisconnected && !signal.aborted,
+      timedOut: signal.aborted,
+      encodeTimeMs: finalEncodeTime,
+      eventLoopLag: typeof eventLoopLag === 'number' ? eventLoopLag : 0
+    });
   }
-
-  activeRequests--;
-  concurrencyGovernor.release({
-    success: !clientDisconnected && !signal.aborted,
-    timedOut: signal.aborted,
-    encodeTimeMs: finalEncodeTime,
-    eventLoopLag: typeof eventLoopLag === 'number' ? eventLoopLag : 0
-  });
- }
 }
