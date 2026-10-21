@@ -975,13 +975,17 @@ if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawB
       code === 'UND_ERR_BODY_TIMEOUT' ||
       code === 'UPSTREAM_DEADLINE'
     ) {
-      return sendGhost(res, 60, null, 'proxy_error');
-} finally {
-  if (reservedBodyBytes > 0) {
-    memoryGovernor.releaseBytes(reservedBodyBytes);
+      return sendGhost(res, 60, null, 'upstream_timeout');
+    }
+
+    log.error({ reqId, error: sanitizeError(error) }, '[PROXY ERROR]');
+    return sendGhost(res, 60, null, 'proxy_error');
+  } finally {
+    if (reservedBodyBytes > 0) {
+      memoryGovernor.releaseBytes(reservedBodyBytes);
+    }
   }
- }
-}  
+}
     log.error({ reqId, error: sanitizeError(error) }, '[PROXY ERROR]');
     return sendGhost(res, 60, null, 'proxy_error');
   }
