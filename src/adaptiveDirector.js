@@ -399,53 +399,6 @@ export function recordRejection({
   stats.set(key, entry);
 }
 
-  const bucket = classifyGeometry({ width, height, frames, pixelCost });
-  const key = statsKey(format, bucket);
-
-  const entry = stats.get(key) || {
-    samples: [],
-    timeouts: 0,
-    failures: 0
-  };
-
-  if (timedOut) {
-    entry.timeouts++;
-  }
-
-  if (!success) {
-    entry.failures++;
-  }
-
-  if (Number.isFinite(encodeMs) && encodeMs > 0) {
-    const px = Number(pixelCost) || (Number(width) || 1) * (Number(height) || 1) * (frames || 1);
-    const mp = Math.max(0.1, px / 1_000_000);
-
-    const msPerMp = encodeMs / mp;
-    const baseline = BASELINE_EFFORT[format] ?? 0;
-
-    const normalizedMsPerMp =
-      msPerMp *
-      (effortFactor(format, baseline) / effortFactor(format, effort));
-
-    entry.samples.push({
-      at: Date.now(),
-      effort,
-      encodeMs,
-      mp,
-      msPerMp,
-      normalizedMsPerMp,
-      timedOut,
-      success
-    });
-
-    while (entry.samples.length > ROLLING_WINDOW) {
-      entry.samples.shift();
-    }
-  }
-
-  stats.set(key, entry);
-}
-
 export function getStatus() {
   const entries = {};
 
