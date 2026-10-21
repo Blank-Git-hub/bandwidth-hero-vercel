@@ -12,7 +12,6 @@ const ROLLING_WINDOW = safeInt(process.env.ADAPTIVE_ROLLING_WINDOW, 20);
 const MIN_SAMPLES = safeInt(process.env.ADAPTIVE_MIN_SAMPLES, 3);
 
 const EFFORT_CEILINGS = {
-const EFFORT_CEILINGS = {
   avif: {
     tiny: 7,
     normal: 4,
