@@ -49,6 +49,10 @@ function getLimit() {
   return limit;
 }
 
+function getEncodeLimit() {
+  return encodeLimit;
+}
+
 function getActive() {
   return active;
 }
@@ -232,6 +236,7 @@ export default {
   tryAdmit,
   release,
   getLimit,
+  getEncodeLimit,
   getActive,
   getLastReason,
   getEnabled,
