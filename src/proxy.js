@@ -589,6 +589,7 @@ async function fetchWithBackoff(url, headers, signal) {
 
 export default async function proxy(req, res) {
   const startTime = Date.now();
+  req.proxyStartedAt = startTime;
   const reqId = req.id || 'unknown';
   const log = req.log || console;
 
@@ -739,6 +740,8 @@ export default async function proxy(req, res) {
       }
     }
 
+    log.info({ event: 'FETCH_COMPLETE', reqId, fetchMs: Date.now() - startTime, bytes: rawBody.length });
+    
     const downloadBudget = memoryGovernor.getDownloadBudget();
     if (rawBody.length > downloadBudget) {
       return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'download_budget_exceeded');
