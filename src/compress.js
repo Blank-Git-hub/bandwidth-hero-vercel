@@ -1290,6 +1290,7 @@ eventLoopLag = await measureEventLoopLag();
       });
 
       let effort = adaptive.effort;
+      const predictedEncodeMs = adaptive.predictedMs;
 
       // FEATURE: CPU pressure reduces effort
       if (cpuPressure) {
@@ -1701,6 +1702,10 @@ eventLoopLag = await measureEventLoopLag();
      timedOut: signal.aborted
    });
       res.setHeader('X-Processing-Time', `${encodeTime}ms`);
+      res.setHeader('X-Adaptive-Actual', `${encodeTime}ms`);
+      res.setHeader('X-Adaptive-Error', predictedEncodeMs > 0
+        ? `${Math.round(((encodeTime - predictedEncodeMs) / predictedEncodeMs) * 100)}%`
+        : 'N/A');
       res.setHeader('X-Encode-Effort', String(effort));
 
       // Request-level release is handled exactly once in the outer finally.
@@ -1875,7 +1880,17 @@ eventLoopLag = await measureEventLoopLag();
        enhancements: enhancementState,
        appliedEnhancements,
        watchdog,
-       totalElapsedMs: Date.now() - (req.proxyStartedAt || startedAt)
+       totalElapsedMs: Date.now() - (req.proxyStartedAt || startedAt),
+       adaptive: {
+         bucket: adaptive.bucket,
+         budgetMs: budget.budgetMs,
+         predictedMs: predictedEncodeMs,
+         actualMs: encodeTime,
+         errorPercent: predictedEncodeMs > 0
+           ? Math.round(((encodeTime - predictedEncodeMs) / predictedEncodeMs) * 100)
+           : 0,
+         risk: adaptive.risk
+       }
      });
       
       res.setHeader('X-Watchdog', Object.entries(watchdog).map(([k,v])=>`${k}:${v}ms`).join(','));
