@@ -721,8 +721,10 @@ export default async function proxy(req, res) {
     }
   }
 
-  try {
-    let rawBody;
+  let reservedBodyBytes = 0;
+
+try {
+  let rawBody;
 
     if (statusCode === 304 && vaultEntry) {
       rawBody = vaultEntry.raw;
@@ -746,6 +748,14 @@ export default async function proxy(req, res) {
     if (rawBody.length > downloadBudget) {
       return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'download_budget_exceeded');
     }
+
+  if (rawBody.length > 0) {
+  if (!memoryGovernor.admitBytes(rawBody.length)) {
+    return sendGhost(res, 60, { body: rawBody, accept: req.headers.accept }, 'byte_budget_exceeded');
+  }
+
+  reservedBodyBytes = rawBody.length;
+  }
     
     if (statusCode === 200 && rawBody.length <= RAW_VAULT_MAX_ENTRY) {
       const upstreamEtag = responseHeaders['etag'] || null;
@@ -965,8 +975,12 @@ if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawB
       code === 'UND_ERR_BODY_TIMEOUT' ||
       code === 'UPSTREAM_DEADLINE'
     ) {
-      return sendGhost(res, 60, null, 'upstream_timeout');
-    }
+      return sendGhost(res, 60, null, 'proxy_error');
+} finally {
+  if (reservedBodyBytes > 0) {
+    memoryGovernor.releaseBytes(reservedBodyBytes);
+  }
+}
 
     log.error({ reqId, error: sanitizeError(error) }, '[PROXY ERROR]');
     return sendGhost(res, 60, null, 'proxy_error');
