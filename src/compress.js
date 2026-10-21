@@ -3,6 +3,7 @@ import { createHash, webcrypto } from 'node:crypto';
 import { LRUCache } from 'lru-cache';
 import memoryGovernor from './memoryGovernor.js';
 import concurrencyGovernor from './concurrencyGovernor.js';
+import adaptiveDirector from './adaptiveDirector.js';
 
 const subtle = webcrypto?.subtle ?? globalThis.crypto?.subtle;
 
@@ -1274,9 +1275,21 @@ eventLoopLag = await measureEventLoopLag();
         return Buffer.alloc(0);
       }
 
-      // CHRONOS v2
-      const chronos = getChronosState(totalPixelCost, outputFormat);
-      let effort = chronos.effort;
+      // ADAPTIVE DIRECTOR v3
+      const budget = adaptiveDirector.getEncodeBudget({ startedAt: req.proxyStartedAt || startedAt });
+      const adaptivePressure = cpuPressure ? 1.3 : 1.0;
+
+      const adaptive = adaptiveDirector.chooseEffort({
+        format: outputFormat,
+        width,
+        height,
+        frames,
+        pixelCost: totalPixelCost,
+        budgetMs: budget.budgetMs,
+        pressure: adaptivePressure
+      });
+
+      let effort = adaptive.effort;
 
       // FEATURE: CPU pressure reduces effort
       if (cpuPressure) {
@@ -1284,8 +1297,11 @@ eventLoopLag = await measureEventLoopLag();
         res.setHeader('X-CPU-Effort-Reduced', 'TRUE');
       }
 
-      res.setHeader('X-Chronos-State', chronos.state);
-      res.setHeader('X-Chronos-Effort', String(effort));
+      res.setHeader('X-Adaptive-Bucket', adaptive.bucket);
+      res.setHeader('X-Adaptive-Budget', String(budget.budgetMs));
+      res.setHeader('X-Adaptive-Predicted', String(adaptive.predictedMs));
+      res.setHeader('X-Adaptive-Effort', String(effort));
+      res.setHeader('X-Adaptive-Risk', adaptive.risk);
 
       // Quality
       let quality = req.opts?.quality ?? (parseInt(req.query.q || req.query.quality) || DEFAULT_QUALITY);
@@ -1673,7 +1689,17 @@ eventLoopLag = await measureEventLoopLag();
      });
    }
 
-   recordEncodeTime(encodeTime, totalPixelCost, outputFormat);
+   adaptiveDirector.recordEncode({
+     format: outputFormat,
+     width: origW,
+     height: origH,
+     frames,
+     pixelCost: totalPixelCost,
+     effort: typeof safeAvifEffort !== 'undefined' ? safeAvifEffort : effort,
+     encodeMs: encodeTime,
+     success: !clientDisconnected && !signal.aborted,
+     timedOut: signal.aborted
+   });
       res.setHeader('X-Processing-Time', `${encodeTime}ms`);
       res.setHeader('X-Encode-Effort', String(effort));
 
