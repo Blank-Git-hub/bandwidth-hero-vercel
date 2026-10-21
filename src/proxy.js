@@ -954,7 +954,6 @@ if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawB
 
     return bypass(req, res, rawBody, statusCode);
   } catch (error) {
-  } catch (error) {
     if (isClientAborted(req)) return;
 
     const isBodyTooLarge =
@@ -963,7 +962,7 @@ if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawB
       error.code === 'BODY_TOO_LARGE';
 
     if (isBodyTooLarge) return sendGhost(res, 3600, null, 'body_too_large');
-    
+
     const code = error.code;
 
     if (code === 'SSRF_BLOCKED_REDIRECT' || code === 'SSRF_BLOCKED_DNS') {
