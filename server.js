@@ -18,6 +18,7 @@ import params from './src/params.js';
 import proxy from './src/proxy.js';
 import { getMetrics, checkHealth } from './src/compress.js';
 import memoryGovernor from './src/memoryGovernor.js';
+import adaptiveDirector from './src/adaptiveDirector.js';
 
 const brotliCompressAsync = promisify(brotliCompress);
 
@@ -136,7 +137,10 @@ app.get('/metrics', authenticate, (req, res) => {
 app.get('/deep-health', authenticate, async (req, res) => {
   try {
     const health = await checkHealth();
-    res.status(health.healthy ? 200 : 503).json(health);
+    res.status(health.healthy ? 200 : 503).json({
+      ...health,
+      adaptiveDirector: adaptiveDirector.getStatus()
+    });
   } catch (err) {
     res.status(500).json({ error: 'Health check failed' });
   }
