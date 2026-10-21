@@ -328,6 +328,31 @@ async function measureEventLoopLag() {
   });
 }
 
+function computeAdaptivePressure({ eventLoopLag, activeEncodes, encodeLimit, memoryUnderPressure }) {
+  let pressure = 1.0;
+
+  // Event loop lag: scale from 1.0 to 1.5 based on how far over threshold
+  if (eventLoopLag > EVENT_LOOP_MAX_MS) {
+    const overshoot = (eventLoopLag - EVENT_LOOP_MAX_MS) / EVENT_LOOP_MAX_MS;
+    pressure += Math.min(overshoot * 0.5, 0.5);
+  }
+
+  // Active encodes: scale based on contention
+  if (encodeLimit > 0 && activeEncodes >= encodeLimit) {
+    pressure += 0.3;
+  } else if (encodeLimit > 0 && activeEncodes >= encodeLimit * 0.5) {
+    pressure += 0.15;
+  }
+
+  // Memory pressure: fixed boost
+  if (memoryUnderPressure) {
+    pressure += 0.4;
+  }
+
+  // Cap pressure at 2.5x to avoid over-suppressing effort
+  return Math.min(pressure, 2.5);
+}
+
 // ============================================================
 // FEATURE: Smart Alpha Channel Trimming helper
 // ============================================================
@@ -1277,7 +1302,12 @@ eventLoopLag = await measureEventLoopLag();
 
       // ADAPTIVE DIRECTOR v3
       const budget = adaptiveDirector.getEncodeBudget({ startedAt: req.proxyStartedAt || startedAt });
-      const adaptivePressure = cpuPressure ? 1.3 : 1.0;
+      const adaptivePressure = computeAdaptivePressure({
+        eventLoopLag,
+        activeEncodes,
+        encodeLimit: concurrencyGovernor.getEncodeLimit(),
+        memoryUnderPressure: memoryGovernor.isUnderPressure()
+      });
 
       const adaptive = adaptiveDirector.chooseEffort({
         format: outputFormat,
@@ -1303,6 +1333,7 @@ eventLoopLag = await measureEventLoopLag();
       res.setHeader('X-Adaptive-Predicted', String(adaptive.predictedMs));
       res.setHeader('X-Adaptive-Effort', String(effort));
       res.setHeader('X-Adaptive-Risk', adaptive.risk);
+      res.setHeader('X-Adaptive-Pressure', String(Math.round(adaptivePressure * 100) / 100));
 
       // Quality
       let quality = req.opts?.quality ?? (parseInt(req.query.q || req.query.quality) || DEFAULT_QUALITY);
@@ -1889,7 +1920,11 @@ eventLoopLag = await measureEventLoopLag();
          errorPercent: predictedEncodeMs > 0
            ? Math.round(((encodeTime - predictedEncodeMs) / predictedEncodeMs) * 100)
            : 0,
-         risk: adaptive.risk
+         risk: adaptive.risk,
+         pressure: adaptivePressure,
+         eventLoopLagMs: eventLoopLag,
+         activeEncodes,
+         memoryPressure: memoryGovernor.isUnderPressure()
        }
      });
       
