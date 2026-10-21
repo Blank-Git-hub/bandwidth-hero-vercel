@@ -17,6 +17,12 @@ function safeFloat(value, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+function envBool(name, fallback = false) {
+  const v = process.env[name];
+  if (v === undefined) return fallback;
+  return v === '1' || v === 'true' || v === 'yes';
+}
+
 sharp.cache({ memory: 0, files: 0, items: 0 });
 
 async function generateExactHash(buffer) {
@@ -49,6 +55,7 @@ const ANALYSIS_MAX_PIXELS = safeInt(process.env.ANALYSIS_MAX_PIXELS, 16_000_000)
 
 // FEATURE: CPU/event-loop pressure governor
 const CPU_LAG_THRESHOLD_MS = safeInt(process.env.CPU_LAG_THRESHOLD_MS, 80);
+const EVENT_LOOP_MAX_MS = safeInt(process.env.ADAPTIVE_EVENT_LOOP_MAX_MS, CPU_LAG_THRESHOLD_MS);
 
 // FEATURE: HDR/wide-gamut safe downconversion
 const ENABLE_HDR_SAFE_CONVERSION = envBool('ENABLE_HDR_SAFE_CONVERSION', true);
@@ -279,11 +286,6 @@ function getChronosState(pixelCount, outputFormat) {
 // ============================================================
 // FEATURE FLAGS
 // ============================================================
-function envBool(name, fallback = false) {
-  const v = process.env[name];
-  if (v === undefined) return fallback;
-  return v === '1' || v === 'true' || v === 'yes';
-}
 
 const FORCE_GRAYSCALE = envBool('FORCE_GRAYSCALE', false);
 const STRIP_ALPHA = envBool('STRIP_ALPHA', true);
@@ -1026,6 +1028,7 @@ let eventLoopLag;
 
     const formatDecision = chooseOutputFormat(metadata, totalPixelCost);
     const outputFormat = formatDecision.format;
+    const chronos = getChronosState(totalPixelCost, outputFormat);
 
     let logUrl = 'unknown';
  try {
@@ -1371,10 +1374,12 @@ eventLoopLag = await measureEventLoopLag();
       }
 
       // Build Sharp pipeline
-      let pipeline = sharp(buffer, {
-     animated: isAnimated,
-     limitInputPixels: 0
-   });
+      const sharpPixelLimit = Math.max(1, totalPixelCost, memGov.getPixelBudget());
+
+let pipeline = sharp(buffer, {
+  animated: isAnimated,
+  limitInputPixels: sharpPixelLimit
+});
 
       // FEATURE: Safe Metadata Exceptions
       if (ENABLE_SAFE_METADATA && ENABLE_METADATA_REAPER) {
@@ -1475,6 +1480,46 @@ eventLoopLag = await measureEventLoopLag();
         res.setHeader('X-Line-Denoise', 'true');
         recordMetric('lineDenoise');
       }
+
+      // --- AVIF EFFORT SAFETY FOR MASSIVE STRIPS ---
+// Prevents Vercel 60s hard-kills on tall manhwa strips by reducing libaom CPU effort
+const adaptiveCeiling = adaptiveDirector.getEffortCeiling({
+  format: outputFormat,
+  bucket: adaptive.bucket
+});
+
+let safeEncodeEffort = Math.min(effort, adaptiveCeiling);
+
+if (safeEncodeEffort !== effort) {
+  res.setHeader('X-Adaptive-Ceiling-Applied', String(safeEncodeEffort));
+}
+
+// --- COMPRESS OR SHRINK WATCHDOG ---
+// If AdaptiveDirector predicts budget_exceeded, force minimum effort.
+// If still over budget, shrink dimensions to fit.
+let watchdogScaleFactor = 1;
+
+if (adaptive.risk === 'budget_exceeded') {
+  safeEncodeEffort = 0;
+  res.setHeader('X-Watchdog', 'EFFORT_FORCED_0');
+
+  const effortZeroPrediction = adaptiveDirector.predictEncodeMs({
+    format: outputFormat,
+    width,
+    height,
+    frames,
+    pixelCost: totalPixelCost,
+    effort: 0,
+    pressure: adaptivePressure
+  });
+
+  if (effortZeroPrediction > budget.budgetMs) {
+    // Still over budget. Shrink dimensions to fit.
+    watchdogScaleFactor = Math.sqrt(budget.budgetMs / effortZeroPrediction);
+    watchdogScaleFactor = Math.max(0.25, Math.min(watchdogScaleFactor, 1));
+    res.setHeader('X-Watchdog', `SHRINK_${Math.round(watchdogScaleFactor * 100)}%`);
+  }
+}
 
       // Resize
       let targetWidth = null;
@@ -1609,45 +1654,6 @@ eventLoopLag = await measureEventLoopLag();
         return Buffer.alloc(0);
       }
 
-      // --- AVIF EFFORT SAFETY FOR MASSIVE STRIPS ---
-      // Prevents Vercel 60s hard-kills on tall manhwa strips by reducing libaom CPU effort
-      const adaptiveCeiling = adaptiveDirector.getEffortCeiling({
-        format: outputFormat,
-        bucket: adaptive.bucket
-      });
-
-      let safeEncodeEffort = Math.min(effort, adaptiveCeiling);
-
-      if (safeEncodeEffort !== effort) {
-        res.setHeader('X-Adaptive-Ceiling-Applied', String(safeEncodeEffort));
-      }
-
-      // --- COMPRESS OR SHRINK WATCHDOG ---
-      // If AdaptiveDirector predicts budget_exceeded, force minimum effort.
-      // If still over budget, shrink dimensions to fit.
-      let watchdogScaleFactor = 1;
-
-      if (adaptive.risk === 'budget_exceeded') {
-        safeEncodeEffort = 0;
-        res.setHeader('X-Watchdog', 'EFFORT_FORCED_0');
-
-        const effortZeroPrediction = adaptiveDirector.predictEncodeMs({
-          format: outputFormat,
-          width,
-          height,
-          frames,
-          pixelCost: totalPixelCost,
-          effort: 0,
-          pressure: adaptivePressure
-        });
-
-        if (effortZeroPrediction > budget.budgetMs) {
-          // Still over budget. Shrink dimensions to fit.
-          watchdogScaleFactor = Math.sqrt(budget.budgetMs / effortZeroPrediction);
-          watchdogScaleFactor = Math.max(0.25, Math.min(watchdogScaleFactor, 1));
-          res.setHeader('X-Watchdog', `SHRINK_${Math.round(watchdogScaleFactor * 100)}%`);
-        }
-      }
       // -----------------------------------
       // --------------------------------------------
       // ENCODE
