@@ -232,6 +232,8 @@ export function predictEncodeMs({
   const px = Number(pixelCost) || (Number(width) || 1) * (Number(height) || 1) * (frames || 1);
   const mp = Math.max(0.1, px / 1_000_000);
 
+  const statsEntry = getStatsEntry(format, bucket);
+
   const learned =
     getAverageNormalized(format, bucket) ??
     getFormatAverage(format);
@@ -243,8 +245,9 @@ export function predictEncodeMs({
   const factor = effortFactor(format, effort) / effortFactor(format, baseline);
 
   const pressureMultiplier = Number.isFinite(pressure) && pressure > 0 ? pressure : 1;
+  const failurePenalty = statsEntry ? Math.min(0.5, (statsEntry.failures || 0) * 0.05) : 0;
 
-  return Math.max(1, Math.round(mp * base * factor * pressureMultiplier));
+  return Math.max(1, Math.round(mp * base * factor * (pressureMultiplier + failurePenalty)));
 }
 
 export function chooseEffort({
@@ -323,6 +326,31 @@ export function recordEncode({
   if (!Object.prototype.hasOwnProperty.call(FORMAT_MAX_EFFORT, format)) {
   return;
 }
+
+  export function recordRejection({
+  format = 'avif',
+  width = 0,
+  height = 0,
+  frames = 1,
+  pixelCost = 0
+} = {}) {
+  if (!Object.prototype.hasOwnProperty.call(FORMAT_MAX_EFFORT, format)) {
+    return;
+  }
+
+  const bucket = classifyGeometry({ width, height, frames, pixelCost });
+  const key = statsKey(format, bucket);
+
+  const entry = stats.get(key) || {
+    samples: [],
+    timeouts: 0,
+    failures: 0
+  };
+
+  entry.failures = Math.min(1000, entry.failures + 1);
+
+  stats.set(key, entry);
+  }
 
   const bucket = classifyGeometry({ width, height, frames, pixelCost });
   const key = statsKey(format, bucket);
@@ -406,6 +434,7 @@ export default {
   predictEncodeMs,
   chooseEffort,
   recordEncode,
+  recordRejection,
   getStatus,
   resetStats,
   TOTAL_DEADLINE_MS,
