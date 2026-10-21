@@ -1051,9 +1051,10 @@ let eventLoopLag;
     res.setHeader('X-Format-Reason', formatDecision.reason);
 
     log.info({
-   event: 'FORMAT_DECISION',
-   reqId,
-   url: logUrl,
+      event: 'FORMAT_DECISION',
+      reqId,
+      elapsedMs: Date.now() - (req.proxyStartedAt || startedAt),
+      url: logUrl,
    format: outputFormat,
    reason: formatDecision.reason,
    width,
@@ -1840,9 +1841,10 @@ eventLoopLag = await measureEventLoopLag();
         cpuPressureDisabledEnhancements: cpuPressure,
        enhancements: enhancementState,
        appliedEnhancements,
-       watchdog
+       watchdog,
+       totalElapsedMs: Date.now() - (req.proxyStartedAt || startedAt)
      });
-
+      
       res.setHeader('X-Watchdog', Object.entries(watchdog).map(([k,v])=>`${k}:${v}ms`).join(','));
       res.setHeader('Content-Length', outputBuffer.length);
       return outputBuffer;
