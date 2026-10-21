@@ -12,9 +12,10 @@ const ROLLING_WINDOW = safeInt(process.env.ADAPTIVE_ROLLING_WINDOW, 20);
 const MIN_SAMPLES = safeInt(process.env.ADAPTIVE_MIN_SAMPLES, 3);
 
 const EFFORT_CEILINGS = {
+const EFFORT_CEILINGS = {
   avif: {
-    tiny: 9,
-    normal: 9,
+    tiny: 7,
+    normal: 4,
     portrait: 8,
     strip: 5,
     extreme_strip: 3,
@@ -247,7 +248,14 @@ export function predictEncodeMs({
   const pressureMultiplier = Number.isFinite(pressure) && pressure > 0 ? pressure : 1;
   const failurePenalty = statsEntry ? Math.min(0.5, (statsEntry.failures || 0) * 0.05) : 0;
 
-  return Math.max(1, Math.round(mp * base * factor * (pressureMultiplier + failurePenalty)));
+  // Fixed overhead: AVIF/WebP encoding has setup cost that doesn't scale with MP.
+  // Without this, small images are massively underestimated at high effort.
+  const overheadMs = format === 'avif' ? 4000 : format === 'webp' ? 800 : 200;
+  const effortOverhead = overheadMs * (factor - 1);
+
+  const predicted = (mp * base * factor + overheadMs + effortOverhead) * (pressureMultiplier + failurePenalty);
+
+  return Math.max(1, Math.round(predicted));
 }
 
 export function chooseEffort({
