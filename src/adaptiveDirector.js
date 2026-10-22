@@ -13,15 +13,15 @@ const MIN_SAMPLES = safeInt(process.env.ADAPTIVE_MIN_SAMPLES, 3);
 
 const EFFORT_CEILINGS = {
   avif: {
-    tiny: 7,
+    tiny: 6,
     normal: 4,
-    portrait: 8,
+    portrait: 6,
     strip: 5,
     extreme_strip: 3,
     animated: 5
   },
   webp: {
-    tiny: 6,
+    tiny: 60,
     normal: 6,
     portrait: 5,
     strip: 4,
