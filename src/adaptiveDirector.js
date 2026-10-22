@@ -15,7 +15,7 @@ const EFFORT_CEILINGS = {
   avif: {
     tiny: 6,
     normal: 4,
-    portrait: 6,
+    portrait: 5,
     strip: 5,
     extreme_strip: 3,
     animated: 5
@@ -23,7 +23,7 @@ const EFFORT_CEILINGS = {
   webp: {
     tiny: 60,
     normal: 6,
-    portrait: 4,
+    portrait: 6,
     strip: 4,
     extreme_strip: 3,
     animated: 4
