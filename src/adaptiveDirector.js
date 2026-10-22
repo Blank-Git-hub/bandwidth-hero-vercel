@@ -23,7 +23,7 @@ const EFFORT_CEILINGS = {
   webp: {
     tiny: 60,
     normal: 6,
-    portrait: 5,
+    portrait: 4,
     strip: 4,
     extreme_strip: 3,
     animated: 4
