@@ -773,8 +773,10 @@ try {
     if (statusCode === 404) return sendGhost(res, 86400, { body: rawBody, accept: req.headers.accept }, 'upstream_404');
 if (statusCode === 410) return sendGhost(res, 86400, { body: rawBody, accept: req.headers.accept }, 'upstream_410_gone');
 if (statusCode === 403) return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'upstream_403');
-if (statusCode !== 304 && (statusCode < 200 || statusCode >= 300)) return sendGhost(res, 60, { body: rawBody, accept: req.headers.accept }, 'upstream_error');
-
+if (statusCode !== 304 && (statusCode < 200 || statusCode >= 300)) {
+  log.warn({ reqId, statusCode, url: sanitizeUrl(targetUrl) }, '[UPSTREAM ERROR] Non-2xx response');
+  return sendGhost(res, 60, { body: rawBody, accept: req.headers.accept }, `upstream_error_${statusCode}`);
+}
     const detectedType = detectContentType(rawBody);
 if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'not_an_image');
     
