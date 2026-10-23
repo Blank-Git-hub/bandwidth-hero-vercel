@@ -146,9 +146,9 @@ export function getEffortLimitByMp({
   const mp = px / 1_000_000;
 
   if (format === 'avif') {
-    if (mp <= 1) return 6;
-    if (mp <= 3) return 4;
-    if (mp <= 6) return 4;
+    if (mp <= 1) return 7;
+    if (mp <= 3) return 6;
+    if (mp <= 6) return 5;
     if (mp <= 9) return 4;
     if (mp <= 12) return 3;
     if (mp <= 18) return 2;
