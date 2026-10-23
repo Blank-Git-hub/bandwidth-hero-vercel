@@ -540,7 +540,7 @@ const RETRYABLE_CODES = new Set([
   'UND_ERR_BODY_TIMEOUT', 'UPSTREAM_DEADLINE', 'ECONNRESET', 'UND_ERR_CONNECT_TIMEOUT'
 ]);
 
-const RETRYABLE_STATUSES = new Set([502, 503, 504, 429, 520, 521, 522, 523, 524]);
+const RETRYABLE_STATUSES = new Set([408, 500, 502, 503, 504, 429, 520, 521, 522, 523, 524]);
 
 async function fetchWithBackoff(url, headers, signal) {
   const totalDeadline = Date.now() + UPSTREAM_TOTAL_DEADLINE_MS;
