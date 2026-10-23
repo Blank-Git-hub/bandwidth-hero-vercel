@@ -13,20 +13,20 @@ const MIN_SAMPLES = safeInt(process.env.ADAPTIVE_MIN_SAMPLES, 3);
 
 const EFFORT_CEILINGS = {
   avif: {
-    tiny: 6,
-    normal: 4,
-    portrait: 5,
-    strip: 5,
-    extreme_strip: 3,
-    animated: 5
+    tiny: 9,
+    normal: 9,
+    portrait: 9,
+    strip: 9,
+    extreme_strip: 9,
+    animated: 9
   },
   webp: {
-    tiny: 60,
+    tiny: 6,
     normal: 6,
     portrait: 6,
-    strip: 4,
-    extreme_strip: 3,
-    animated: 4
+    strip: 6,
+    extreme_strip: 6,
+    animated: 6
   },
   jpeg: {
     tiny: 0,
@@ -133,6 +133,35 @@ function effortFactor(format, effort) {
 
 export function getEffortCeiling({ format = 'avif', bucket = 'normal' } = {}) {
   return EFFORT_CEILINGS[format]?.[bucket] ?? FORMAT_MAX_EFFORT[format] ?? 0;
+}
+
+export function getEffortLimitByMp({
+  format = 'avif',
+  width = 0,
+  height = 0,
+  frames = 1,
+  pixelCost = 0
+} = {}) {
+  const px = Number(pixelCost) || (Number(width) || 1) * (Number(height) || 1) * (frames || 1);
+  const mp = px / 1_000_000;
+
+  if (format === 'avif') {
+    if (mp <= 1) return 6;
+    if (mp <= 3) return 5;
+    if (mp <= 6) return 4;
+    if (mp <= 10) return 3;
+    if (mp <= 18) return 2;
+    return 2;
+  }
+
+  if (format === 'webp') {
+    if (mp <= 2) return 6;
+    if (mp <= 8) return 5;
+    if (mp <= 20) return 4;
+    return 2;
+  }
+
+  return 4;
 }
 
 export function classifyGeometry({ width = 0, height = 0, frames = 1, pixelCost = 0 } = {}) {
@@ -270,8 +299,8 @@ export function chooseEffort({
 } = {}) {
   const maxFormatEffort = FORMAT_MAX_EFFORT[format] ?? 0;
   const bucket = classifyGeometry({ width, height, frames, pixelCost });
-  const ceiling = getEffortCeiling({ format, bucket });
-
+  const ceiling = getEffortLimitByMp({ format, width, height, frames, pixelCost });
+  
   const max = Math.min(
     Number.isFinite(maxEffort) ? maxEffort : maxFormatEffort,
     maxFormatEffort,
@@ -437,6 +466,7 @@ export function resetStats() {
 export default {
   classifyGeometry,
   getEffortCeiling,
+  getEffortLimitByMp,
   getEncodeBudget,
   predictEncodeMs,
   chooseEffort,
