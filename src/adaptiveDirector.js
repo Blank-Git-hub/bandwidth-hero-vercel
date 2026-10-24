@@ -282,7 +282,11 @@ export function predictEncodeMs({
     getFormatAverage(format);
 
   const defaultBase = DEFAULT_MS_PER_MP[format]?.[bucket] ?? 1000;
-  const base = learned ?? defaultBase;
+  
+  // Vercel serverless microVMs are ~3.5x slower at AVIF/WebP encoding than bare-metal.
+  // Apply penalty only on cold-start (when no learned stats exist yet).
+  const SERVERLESS_PENALTY = 3.5;
+  const base = learned ? learned : (defaultBase * SERVERLESS_PENALTY);
 
   const baseline = BASELINE_EFFORT[format] ?? 0;
   const factor = effortFactor(format, effort) / effortFactor(format, baseline);
@@ -320,12 +324,11 @@ export function chooseEffort({
 } = {}) {
   const maxFormatEffort = FORMAT_MAX_EFFORT[format] ?? 0;
   const bucket = classifyGeometry({ width, height, frames, pixelCost });
-  const ceiling = getEffortLimitByMp({ format, width, height, frames, pixelCost });
   
+  // Removed hard MP cap. Adaptability and time budget now govern the ceiling.
   const max = Math.min(
     Number.isFinite(maxEffort) ? maxEffort : maxFormatEffort,
-    maxFormatEffort,
-    ceiling
+    maxFormatEffort
   );
 
   const min = Math.max(0, Math.min(Number.isFinite(minEffort) ? minEffort : 0, max));
