@@ -458,7 +458,7 @@ async function generatePlaceholderAndPalette(buffer) {
 async function detectSkew(buffer) {
   try {
     const { data, info } = await sharp(buffer)
-      .resize(256, 256, { fit: 'inside' })
+      .resize(512, 512, { fit: 'inside' })
       .grayscale()
       .raw()
       .toBuffer({ resolveWithObject: true });
@@ -467,29 +467,61 @@ async function detectSkew(buffer) {
     const corners = [data[0], data[w - 1], data[(h - 1) * w], data[h * w - 1]];
     const bgValue = corners.reduce((a, b) => a + b, 0) / 4;
 
-    let sumX = 0, sumY = 0, sumXX = 0, sumYY = 0, sumXY = 0, count = 0;
-
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const v = data[y * w + x];
-        if (Math.abs(v - bgValue) > 30) {
-          sumX += x; sumY += y;
-          sumXX += x * x; sumYY += y * y; sumXY += x * y;
-          count++;
-        }
+    // Build binary mask of content pixels
+    const mask = new Uint8Array(w * h);
+    let contentCount = 0;
+    for (let i = 0; i < w * h; i++) {
+      if (Math.abs(data[i] - bgValue) > 30) {
+        mask[i] = 1;
+        contentCount++;
       }
     }
 
-    if (count < 500) return 0;
+    if (contentCount < 500) return 0;
 
-    const meanX = sumX / count, meanY = sumY / count;
-    const covXX = sumXX / count - meanX * meanX;
-    const covYY = sumYY / count - meanY * meanY;
-    const covXY = sumXY / count - meanX * meanY;
-    const angle = 0.5 * Math.atan2(2 * covXY, covXX - covYY) * (180 / Math.PI);
+    // Projection profile method:
+    // Test small angles. The correct angle produces the sharpest
+    // horizontal projection peaks (highest variance) because text
+    // lines align into distinct rows.
+    let bestAngle = 0;
+    let bestVariance = 0;
 
-    if (Math.abs(angle) > 5 && Math.abs(angle) < 15) return angle;
-    return 0;
+    for (let testAngle = -4; testAngle <= 4; testAngle += 0.5) {
+      const rad = (testAngle * Math.PI) / 180;
+      const cosA = Math.cos(rad);
+      const sinA = Math.sin(rad);
+      const cx = w / 2;
+      const cy = h / 2;
+
+      const projection = new Float64Array(h);
+
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          if (!mask[y * w + x]) continue;
+
+          const dx = x - cx;
+          const dy = y - cy;
+          const ry = Math.round(dx * sinA + dy * cosA + cy);
+
+          if (ry >= 0 && ry < h) {
+            projection[ry]++;
+          }
+        }
+      }
+
+      const mean = projection.reduce((a, b) => a + b, 0) / h;
+      const variance = projection.reduce((s, v) => s + (v - mean) ** 2, 0) / h;
+
+      if (variance > bestVariance) {
+        bestVariance = variance;
+        bestAngle = testAngle;
+      }
+    }
+
+    // Reject if the detected angle is too small to matter
+    if (Math.abs(bestAngle) < 0.5) return 0;
+
+    return bestAngle;
   } catch {
     return 0;
   }
@@ -1461,9 +1493,9 @@ let pipeline = sharp(buffer, {
         }
       }
 
-      // Deskew rotation
+      // Deskew rotation (negative angle corrects the detected tilt)
       if (ENABLE_DESKEW && allowEnhancements && !isMangaMode && skewAngle !== 0) {
-        pipeline = pipeline.rotate(skewAngle, {
+        pipeline = pipeline.rotate(-skewAngle, {
           background: analysis.isGrayscale
             ? { r: 255, g: 255, b: 255 }
             : { r: 255, g: 255, b: 255, alpha: 0 },
