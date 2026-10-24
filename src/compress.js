@@ -1320,14 +1320,15 @@ eventLoopLag = await measureEventLoopLag();
       });
 
       const adaptive = adaptiveDirector.chooseEffort({
-        format: outputFormat,
-        width,
-        height,
-        frames,
-        pixelCost: totalPixelCost,
-        budgetMs: budget.budgetMs,
-        pressure: adaptivePressure
-      });
+      format: outputFormat,
+      width,
+      height,
+      frames,
+      pixelCost: totalPixelCost,
+      inputFormat: req.opts?.originType || 'image/jpeg',
+      budgetMs: budget.budgetMs,
+      pressure: adaptivePressure
+    });
 
       let effort = adaptive.effort;
       const predictedEncodeMs = adaptive.predictedMs;
