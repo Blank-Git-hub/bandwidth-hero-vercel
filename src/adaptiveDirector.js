@@ -38,28 +38,41 @@ const EFFORT_CEILINGS = {
   }
 };
 
+// Real-world libaom exponential scaling
 const AVIF_EFFORT_FACTOR = [
-  0.55, // 0
-  0.65, // 1
-  0.75, // 2
-  0.85, // 3
+  0.30, // 0
+  0.40, // 1
+  0.55, // 2
+  0.75, // 3
   1.00, // 4 baseline
-  1.15, // 5
-  1.35, // 6
-  1.60, // 7
-  1.90, // 8
-  2.30  // 9
+  1.60, // 5
+  2.80, // 6
+  5.00, // 7
+  9.00, // 8
+  16.00 // 9
 ];
 
+// Real-world libwebp scaling
 const WEBP_EFFORT_FACTOR = [
-  0.60, // 0
-  0.70, // 1
-  0.80, // 2
-  0.90, // 3
+  0.40, // 0
+  0.55, // 1
+  0.70, // 2
+  0.85, // 3
   1.00, // 4 baseline
-  1.15, // 5
-  1.35  // 6
+  1.50, // 5
+  2.50  // 6
 ];
+
+// Decode cost multipliers (relative to JPEG)
+const DECODE_COST_FACTOR = {
+  'image/jpeg': 1.0,
+  'image/webp': 1.8,
+  'image/png': 2.5,
+  'image/avif': 4.5,
+  'image/jxl': 6.0,
+  'image/gif': 2.0,
+  'default': 2.0
+};
 
 const DEFAULT_MS_PER_MP = {
   avif: {
@@ -253,6 +266,7 @@ export function predictEncodeMs({
   height = 0,
   frames = 1,
   pixelCost = 0,
+  inputFormat = 'image/jpeg',
   effort = 0,
   pressure = 1
 } = {}) {
@@ -276,12 +290,18 @@ export function predictEncodeMs({
   const pressureMultiplier = Number.isFinite(pressure) && pressure > 0 ? pressure : 1;
   const failurePenalty = statsEntry ? Math.min(0.5, (statsEntry.failures || 0) * 0.05) : 0;
 
-  // Fixed overhead: AVIF/WebP encoding has setup cost that doesn't scale with MP.
-  // Without this, small images are massively underestimated at high effort.
-  const overheadMs = format === 'avif' ? 4000 : format === 'webp' ? 800 : 200;
-  const effortOverhead = overheadMs * (factor - 1);
+  // 1. Decode Time (Input MP * Format Cost)
+  const decodeFactor = DECODE_COST_FACTOR[inputFormat] || DECODE_COST_FACTOR['default'];
+  const decodeMs = mp * 150 * decodeFactor; 
 
-  const predicted = (mp * base * factor + overheadMs + effortOverhead) * (pressureMultiplier + failurePenalty);
+  // 2. Encode Time (Output MP * Base * Effort Factor)
+  const encodeMs = mp * base * factor;
+
+  // 3. Overhead (Fixed setup + slight scaling)
+  const baseOverhead = format === 'avif' ? 2500 : format === 'webp' ? 600 : 150;
+  const overheadMs = baseOverhead + (mp * 100);
+
+  const predicted = (decodeMs + encodeMs + overheadMs) * (pressureMultiplier + failurePenalty);
 
   return Math.max(1, Math.round(predicted));
 }
@@ -292,6 +312,7 @@ export function chooseEffort({
   height = 0,
   frames = 1,
   pixelCost = 0,
+  inputFormat = 'image/jpeg',
   budgetMs = MIN_ENCODE_MS,
   pressure = 1,
   maxEffort,
@@ -310,15 +331,16 @@ export function chooseEffort({
   const min = Math.max(0, Math.min(Number.isFinite(minEffort) ? minEffort : 0, max));
 
   let chosenEffort = min;
-  let predictedMs = predictEncodeMs({
-    format,
-    width,
-    height,
-    frames,
-    pixelCost,
-    effort: min,
-    pressure
-  });
+  const predicted = predictEncodeMs({
+      format,
+      width,
+      height,
+      frames,
+      pixelCost,
+      inputFormat,
+      effort,
+      pressure
+    });
 
   for (let effort = max; effort >= min; effort--) {
     const predicted = predictEncodeMs({
