@@ -1330,14 +1330,10 @@ eventLoopLag = await measureEventLoopLag();
       pressure: adaptivePressure
     });
 
-    // Extract variables from adaptive result
-    const effort = adaptive.effort;
-    const predictedMs = adaptive.predictedMs;
+    let effort = adaptive.effort;
+    const predictedEncodeMs = adaptive.predictedMs;
     const risk = adaptive.risk;
     const bucket = adaptive.bucket;
-
-      let effort = adaptive.effort;
-      const predictedEncodeMs = adaptive.predictedMs;
 
       // FEATURE: CPU pressure reduces effort
       if (cpuPressure) {
