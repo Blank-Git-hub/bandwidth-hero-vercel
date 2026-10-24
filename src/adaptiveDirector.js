@@ -331,14 +331,14 @@ export function chooseEffort({
   const min = Math.max(0, Math.min(Number.isFinite(minEffort) ? minEffort : 0, max));
 
   let chosenEffort = min;
-  const predicted = predictEncodeMs({
+  let predictedMs = predictEncodeMs({
       format,
       width,
       height,
       frames,
       pixelCost,
       inputFormat,
-      effort,
+      effort: min,
       pressure
     });
 
@@ -349,6 +349,7 @@ export function chooseEffort({
       height,
       frames,
       pixelCost,
+      inputFormat,
       effort,
       pressure
     });
