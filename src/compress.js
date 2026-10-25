@@ -2088,11 +2088,19 @@ if (analysis.isMangaStrip) {
     }
   } catch (err) {
     if (clientDisconnected || signal.aborted) {
+      const abortMessage = signal.reason?.message || '';
+
       log.warn({
         reqId,
         encodeTimeMs: Date.now() - startedAt,
-        pixelCost: totalPixelCost
+        pixelCost: totalPixelCost,
+        abortReason: abortMessage || 'UNKNOWN'
       }, '[CLIENT_DISCONNECT] Client aborted connection');
+
+      if (!res.headersSent) {
+        res.status(abortMessage === 'SHARP_HARD_TIMEOUT' ? 504 : 499);
+      }
+
       res.setHeader('X-Timeout-Guillotine', 'ABORTED');
       return Buffer.alloc(0);
     }
