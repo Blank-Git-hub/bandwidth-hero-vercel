@@ -944,7 +944,6 @@ if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawB
       }
 
       if (!res.writableEnded) {
-      if (!res.writableEnded) {
         if (compressedResult && compressedResult.length > 0) {
           res.end(compressedResult);
         } else if (!res.headersSent && res.statusCode === 200) {
