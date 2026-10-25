@@ -952,7 +952,10 @@ if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawB
           res.end();
         }
       }
-        
+      
+      return;
+    }
+
     return bypass(req, res, rawBody, statusCode);
   } catch (error) {
     if (isClientAborted(req)) return;
