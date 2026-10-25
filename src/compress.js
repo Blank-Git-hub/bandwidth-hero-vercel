@@ -1852,23 +1852,39 @@ if (analysis.isMangaStrip) {
      });
    }
 
+   const finalRecordedEffort = typeof safeEncodeEffort !== 'undefined' ? safeEncodeEffort : effort;
+
+   const calibrationPredictedMs = adaptiveDirector.predictEncodeMs({
+     format: outputFormat,
+     width: origW,
+     height: origH,
+     frames,
+     pixelCost: totalPixelCost,
+     inputFormat: req.opts?.originType || 'image/jpeg',
+     effort: finalRecordedEffort,
+     pressure: adaptivePressure
+   });
+
    adaptiveDirector.recordEncode({
      format: outputFormat,
      width: origW,
      height: origH,
      frames,
      pixelCost: totalPixelCost,
-     effort: typeof safeEncodeEffort !== 'undefined' ? safeEncodeEffort : effort,
+     effort: finalRecordedEffort,
      encodeMs: encodeTime,
+     predictedMs: calibrationPredictedMs,
+     pressure: adaptivePressure,
      success: !clientDisconnected && !signal.aborted,
      timedOut: signal.aborted
    });
+
       res.setHeader('X-Processing-Time', `${encodeTime}ms`);
       res.setHeader('X-Adaptive-Actual', `${encodeTime}ms`);
-      res.setHeader('X-Adaptive-Error', predictedEncodeMs > 0
-        ? `${Math.round(((encodeTime - predictedEncodeMs) / predictedEncodeMs) * 100)}%`
+      res.setHeader('X-Adaptive-Error', calibrationPredictedMs > 0
+        ? `${Math.round(((encodeTime - calibrationPredictedMs) / calibrationPredictedMs) * 100)}%`
         : 'N/A');
-      res.setHeader('X-Encode-Effort', String(effort));
+      res.setHeader('X-Encode-Effort', String(finalRecordedEffort));
 
       // Request-level release is handled exactly once in the outer finally.
 
@@ -2045,10 +2061,10 @@ if (analysis.isMangaStrip) {
        adaptive: {
          bucket: adaptive.bucket,
          budgetMs: budget.budgetMs,
-         predictedMs: predictedEncodeMs,
+         predictedMs: calibrationPredictedMs,
          actualMs: encodeTime,
-         errorPercent: predictedEncodeMs > 0
-           ? Math.round(((encodeTime - predictedEncodeMs) / predictedEncodeMs) * 100)
+         errorPercent: calibrationPredictedMs > 0
+           ? Math.round(((encodeTime - calibrationPredictedMs) / calibrationPredictedMs) * 100)
            : 0,
          risk: adaptive.risk,
          pressure: adaptivePressure,
