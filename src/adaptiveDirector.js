@@ -114,6 +114,7 @@ const BASELINE_EFFORT = {
 };
 
 const stats = new Map();
+const calibration = new Map();
 
 function statsKey(format, bucket) {
   return `${format}:${bucket}`;
@@ -260,6 +261,50 @@ function getFormatAverage(format) {
   return average(samples.map(sample => sample.normalizedMsPerMp));
 }
 
+function getSampleCount(format, bucket) {
+  const bucketEntry = getStatsEntry(format, bucket);
+
+  if (bucketEntry && bucketEntry.samples.length >= MIN_SAMPLES) {
+    return bucketEntry.samples.length;
+  }
+
+  let count = 0;
+
+  for (const [key, entry] of stats) {
+    if (!key.startsWith(`${format}:`)) {
+      continue;
+    }
+
+    count += entry.samples.length;
+  }
+
+  return count;
+}
+
+function getCalibration(format) {
+  return calibration.get(format) || { factor: 1, samples: 0 };
+}
+
+function updateCalibration(format, predictedMs, actualMs, pressure) {
+  if (!Number.isFinite(predictedMs) || predictedMs <= 0) return;
+  if (!Number.isFinite(actualMs) || actualMs <= 0) return;
+
+  // Do not learn from pressured requests.
+  if (Number.isFinite(pressure) && pressure > 1.15) return;
+
+  const correction = Math.min(2, Math.max(0.5, actualMs / predictedMs));
+  const cal = calibration.get(format) || { factor: 1, samples: 0 };
+
+  // Learn fast at first, then dampen to prevent oscillation.
+  const alpha = cal.samples < 5 ? 0.35 : 0.15;
+
+  cal.factor *= Math.pow(correction, alpha);
+  cal.factor = Math.min(3, Math.max(0.33, cal.factor));
+  cal.samples += 1;
+
+  calibration.set(format, cal);
+}
+
 export function predictEncodeMs({
   format = 'avif',
   width = 0,
@@ -282,11 +327,21 @@ export function predictEncodeMs({
     getFormatAverage(format);
 
   const defaultBase = DEFAULT_MS_PER_MP[format]?.[bucket] ?? 1000;
-  
-  // Vercel serverless microVMs are ~3.5x slower at AVIF/WebP encoding than bare-metal.
-  // Apply penalty only on cold-start (when no learned stats exist yet).
+
+  // Vercel serverless microVMs are slower than bare metal.
   const SERVERLESS_PENALTY = 3.5;
-  const base = learned ? learned : (defaultBase * SERVERLESS_PENALTY);
+  const priorBase = defaultBase * SERVERLESS_PENALTY;
+
+  // Blend learned stats gradually to prevent sudden prediction jumps.
+  const sampleCount = getSampleCount(format, bucket);
+
+  let base;
+  if (!learned) {
+    base = priorBase;
+  } else {
+    const trust = Math.min(1, sampleCount / 10);
+    base = (learned * trust) + (priorBase * (1 - trust));
+  }
 
   const baseline = BASELINE_EFFORT[format] ?? 0;
   const factor = effortFactor(format, effort) / effortFactor(format, baseline);
@@ -294,18 +349,25 @@ export function predictEncodeMs({
   const pressureMultiplier = Number.isFinite(pressure) && pressure > 0 ? pressure : 1;
   const failurePenalty = statsEntry ? Math.min(0.5, (statsEntry.failures || 0) * 0.05) : 0;
 
-  // 1. Decode Time (Input MP * Format Cost)
+  // Decode time.
   const decodeFactor = DECODE_COST_FACTOR[inputFormat] || DECODE_COST_FACTOR['default'];
-  const decodeMs = mp * 150 * decodeFactor; 
+  const decodeMs = mp * 150 * decodeFactor;
 
-  // 2. Encode Time (Output MP * Base * Effort Factor)
+  // Encode time.
   const encodeMs = mp * base * factor;
 
-  // 3. Overhead (Fixed setup + slight scaling)
+  // Fixed encoder overhead.
   const baseOverhead = format === 'avif' ? 2500 : format === 'webp' ? 600 : 150;
   const overheadMs = baseOverhead + (mp * 100);
 
-  const predicted = (decodeMs + encodeMs + overheadMs) * (pressureMultiplier + failurePenalty);
+  // Live calibration from previous real encodes.
+  const cal = getCalibration(format);
+  const calibrationFactor = Number.isFinite(cal.factor) && cal.factor > 0 ? cal.factor : 1;
+
+  const predicted =
+    (decodeMs + encodeMs + overheadMs) *
+    (pressureMultiplier + failurePenalty) *
+    calibrationFactor;
 
   return Math.max(1, Math.round(predicted));
 }
@@ -325,10 +387,12 @@ export function chooseEffort({
   const maxFormatEffort = FORMAT_MAX_EFFORT[format] ?? 0;
   const bucket = classifyGeometry({ width, height, frames, pixelCost });
   
-  // Removed hard MP cap. Adaptability and time budget now govern the ceiling.
+  // MP ceiling as starting reference. Time budget governs the final selection.
+  const mpCeiling = getEffortLimitByMp({ format, width, height, frames, pixelCost });
   const max = Math.min(
     Number.isFinite(maxEffort) ? maxEffort : maxFormatEffort,
-    maxFormatEffort
+    maxFormatEffort,
+    mpCeiling
   );
 
   const min = Math.max(0, Math.min(Number.isFinite(minEffort) ? minEffort : 0, max));
@@ -382,6 +446,8 @@ export function recordEncode({
   pixelCost = 0,
   effort = 0,
   encodeMs = 0,
+  predictedMs = 0,
+  pressure = 1,
   success = true,
   timedOut = false
 } = {}) {
@@ -407,6 +473,10 @@ export function recordEncode({
   }
 
   if (Number.isFinite(encodeMs) && encodeMs > 0) {
+    if (success && !timedOut) {
+      updateCalibration(format, predictedMs, encodeMs, pressure);
+    }
+
     const px = Number(pixelCost) || (Number(width) || 1) * (Number(height) || 1) * (frames || 1);
     const mp = Math.max(0.1, px / 1_000_000);
 
@@ -481,12 +551,14 @@ export function getStatus() {
       ROLLING_WINDOW,
       MIN_SAMPLES
     },
-    entries
+    entries,
+    calibration: Object.fromEntries(calibration)
   };
 }
 
 export function resetStats() {
   stats.clear();
+  calibration.clear();
 }
 
 export default {
