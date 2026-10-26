@@ -1728,22 +1728,56 @@ if (analysis.isMangaStrip) {
    phaseStart = Date.now();
       const encodeStart = Date.now();
       let encodeTime = 0;
-      // Encode-level adaptive admission
-      if (!concurrencyGovernor.tryAdmitEncode()) {
-  adaptiveDirector.recordRejection({
-    format: outputFormat,
-    width,
-    height,
-    frames,
-    pixelCost: totalPixelCost
-  });
+      // Encode-level adaptive admission with waiting queue
+      const encodeWaitStartedAt = Date.now();
+      const remainingHardMs = Math.max(0, hardTimeoutMs - (encodeWaitStartedAt - startedAt));
+      const encodeWaitTimeoutMs = Math.max(
+        250,
+        Math.min(
+          Math.max(250, Number(budget.budgetMs) - 500),
+          Math.max(250, remainingHardMs - 500)
+        )
+      );
 
-  res.status(503);
-  res.setHeader('X-Adaptive-Concurrency', 'ENCODE_REJECTED');
-  res.setHeader('X-Adaptive-Encode-Limit', String(concurrencyGovernor.getStatus().encode.limit));
-  res.setHeader('Retry-After', '3');
-  return Buffer.alloc(0);
-}
+      try {
+        const encodeAdmission = await concurrencyGovernor.waitForEncodeSlot({
+          timeoutMs: encodeWaitTimeoutMs,
+          signal
+        });
+
+        res.setHeader('X-Adaptive-Encode-Wait', `${encodeAdmission.waitedMs}ms`);
+        res.setHeader('X-Adaptive-Encode-Queued', encodeAdmission.queued ? 'TRUE' : 'FALSE');
+      } catch (waitErr) {
+        if (waitErr?.code !== 'ENCODE_WAIT_ABORTED') {
+          adaptiveDirector.recordRejection({
+            format: outputFormat,
+            width,
+            height,
+            frames,
+            pixelCost: totalPixelCost
+          });
+        }
+
+        if (waitErr?.code === 'ENCODE_WAIT_ABORTED') {
+          const abortMessage = signal?.reason?.message || '';
+
+          if (!res.headersSent) {
+            res.status(abortMessage === 'SHARP_HARD_TIMEOUT' ? 504 : 499);
+          }
+
+          res.setHeader('X-Timeout-Guillotine', 'ABORTED');
+        } else if (waitErr?.code === 'ENCODE_WAIT_TIMEOUT') {
+          if (!res.headersSent) res.status(504);
+          res.setHeader('X-Adaptive-Concurrency', 'ENCODE_WAIT_TIMEOUT');
+        } else {
+          if (!res.headersSent) res.status(503);
+          res.setHeader('X-Adaptive-Concurrency', 'ENCODE_QUEUE_REJECTED');
+          res.setHeader('Retry-After', '3');
+        }
+
+        res.setHeader('X-Adaptive-Encode-Limit', String(concurrencyGovernor.getEncodeLimit()));
+        return Buffer.alloc(0);
+      }
 
       res.setHeader('X-Adaptive-Encode-Active', String(concurrencyGovernor.getStatus().encode.active));
 
