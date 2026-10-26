@@ -812,7 +812,11 @@ if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawB
 
     const etag = await generateETag(req, targetUrl, responseHeaders, rawBody);
 
-    if (req.headers['if-none-match'] === etag) {
+    const allowConditional = ['1', 'true', 'yes', 'on'].includes(
+      String(req.query?.etag || req.query?.conditional || '').toLowerCase()
+    );
+
+    if (allowConditional && req.headers['if-none-match'] === etag) {
       res.setHeader('ETag', etag);
       return res.status(304).end();
     }
