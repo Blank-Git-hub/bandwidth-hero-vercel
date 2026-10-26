@@ -35,12 +35,14 @@ const ENCODE_INITIAL_LIMIT = safeInt(process.env.ADAPTIVE_ENCODE_INITIAL, 1);
 const ENCODE_MAX_LIMIT = safeInt(process.env.ADAPTIVE_ENCODE_MAX, 1);
 const ENCODE_COOLDOWN_MS = safeInt(process.env.ADAPTIVE_ENCODE_COOLDOWN_MS, 8000);
 const ENCODE_TIME_THRESHOLD_MS = safeInt(process.env.ADAPTIVE_ENCODE_TIME_MS, 15000);
+const ENCODE_WAIT_QUEUE_MAX = safeInt(process.env.ADAPTIVE_ENCODE_WAIT_QUEUE_MAX, 32);
 
 let encodeLimit = Math.min(Math.max(ENCODE_INITIAL_LIMIT, ENCODE_MIN_LIMIT), ENCODE_MAX_LIMIT);
 let encodeActive = 0;
 let encodeLastAdjustAt = 0;
 let encodeLastReason = 'init';
 let encodeHealthyStreak = 0;
+const encodeWaiters = [];
 
 const recentEncodeTimes = [];
 const MAX_SAMPLES = 10;
@@ -147,6 +149,103 @@ function release(outcome = {}) {
   }
 }
 
+function removeEncodeWaiter(waiter) {
+  const index = encodeWaiters.indexOf(waiter);
+  if (index !== -1) encodeWaiters.splice(index, 1);
+}
+
+function pumpEncodeWaiters() {
+  while (encodeWaiters.length > 0 && encodeActive < encodeLimit) {
+    const waiter = encodeWaiters.shift();
+
+    if (!waiter || waiter.settled) {
+      continue;
+    }
+
+    waiter.settled = true;
+
+    if (waiter.timer) clearTimeout(waiter.timer);
+
+    if (waiter.signal && waiter.onAbort) {
+      waiter.signal.removeEventListener('abort', waiter.onAbort);
+    }
+
+    encodeActive++;
+    waiter.resolve({ waitedMs: Date.now() - waiter.enqueuedAt, queued: true });
+  }
+}
+
+function waitForEncodeSlot({ timeoutMs = 30000, signal = null } = {}) {
+  if (!ENABLED) {
+    return Promise.resolve({ waitedMs: 0, queued: false });
+  }
+
+  if (encodeActive < encodeLimit) {
+    encodeActive++;
+    return Promise.resolve({ waitedMs: 0, queued: false });
+  }
+
+  if (encodeWaiters.length >= ENCODE_WAIT_QUEUE_MAX) {
+    const err = new Error('ENCODE_QUEUE_FULL');
+    err.code = 'ENCODE_QUEUE_FULL';
+    return Promise.reject(err);
+  }
+
+  return new Promise((resolve, reject) => {
+    const waiter = {
+      resolve,
+      reject,
+      settled: false,
+      enqueuedAt: Date.now(),
+      timer: null,
+      signal: null,
+      onAbort: null
+    };
+
+    const fail = (err) => {
+      if (waiter.settled) return;
+
+      waiter.settled = true;
+      removeEncodeWaiter(waiter);
+
+      if (waiter.timer) clearTimeout(waiter.timer);
+
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener('abort', waiter.onAbort);
+      }
+
+      reject(err);
+    };
+
+    waiter.timer = setTimeout(() => {
+      const err = new Error('ENCODE_WAIT_TIMEOUT');
+      err.code = 'ENCODE_WAIT_TIMEOUT';
+      fail(err);
+    }, Math.max(1, Number(timeoutMs) || 30000));
+
+    if (signal) {
+      waiter.signal = signal;
+
+      waiter.onAbort = () => {
+        const err = new Error(signal?.reason?.message || 'ENCODE_WAIT_ABORTED');
+        err.code = 'ENCODE_WAIT_ABORTED';
+        fail(err);
+      };
+
+      if (signal.aborted) {
+        const err = new Error(signal?.reason?.message || 'ENCODE_WAIT_ABORTED');
+        err.code = 'ENCODE_WAIT_ABORTED';
+        fail(err);
+        return;
+      }
+
+      signal.addEventListener('abort', waiter.onAbort, { once: true });
+    }
+
+    encodeWaiters.push(waiter);
+  });
+}
+
 function getStatus() {
   return {
     enabled: ENABLED,
@@ -158,6 +257,8 @@ function getStatus() {
     encode: {
       limit: encodeLimit,
       active: encodeActive,
+      waiting: encodeWaiters.length,
+      queueMax: ENCODE_WAIT_QUEUE_MAX,
       lastReason: encodeLastReason,
       healthyStreak: encodeHealthyStreak
     }
@@ -177,6 +278,12 @@ function tryAdmitEncode() {
 
 function releaseEncode(outcome = {}) {
   if (encodeActive > 0) encodeActive--;
+
+  if (typeof setImmediate === 'function') {
+    setImmediate(pumpEncodeWaiters);
+  } else {
+    setTimeout(pumpEncodeWaiters, 0);
+  }
 
   if (!ENABLED) return;
 
@@ -242,6 +349,7 @@ export default {
   getEnabled,
   getStatus,
   tryAdmitEncode,
+  waitForEncodeSlot,
   releaseEncode,
   ENABLED,
   MIN_LIMIT,
