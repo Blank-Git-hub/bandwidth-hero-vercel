@@ -74,6 +74,46 @@ app.use(
   })
 );
 
+app.use((req, res, next) => {
+  res.on('finish', () => {
+    const log = req.log || logger;
+
+    const rawLength = res.getHeader('content-length');
+    const contentLength = rawLength === undefined ? null : String(rawLength);
+    const contentType = String(res.getHeader('content-type') || '');
+    const ghost = String(res.getHeader('x-ghost') || '').toLowerCase() === 'true';
+    const ghostReason = String(res.getHeader('x-ghost-reason') || '');
+    const status = res.statusCode;
+
+    const emptyBody = contentLength === null || contentLength === '0';
+    const suspicious =
+      status === 304 ||
+      ghost ||
+      emptyBody ||
+      contentType.startsWith('image/');
+
+    if (!suspicious) return;
+
+    log.info({
+      event: 'RESPONSE_FINAL',
+      reqId: req.id,
+      status,
+      contentLength,
+      contentType: contentType || null,
+      ghost,
+      ghostReason,
+      adaptiveConcurrency: String(res.getHeader('x-adaptive-concurrency') || ''),
+      memoryGovernor: String(res.getHeader('x-memory-governor') || ''),
+      encodeWait: String(res.getHeader('x-adaptive-encode-wait') || ''),
+      encodeQueued: String(res.getHeader('x-adaptive-encode-queued') || ''),
+      timeoutGuillotine: String(res.getHeader('x-timeout-guillotine') || ''),
+      path: String(req.url || '').split('?')[0]
+    }, '[RESPONSE FINAL]');
+  });
+
+  next();
+});
+
 // Brotli JSON compression for admin endpoints
 app.use((req, res, next) => {
   const acceptEncoding = req.headers['accept-encoding'] || '';
