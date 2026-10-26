@@ -13,9 +13,9 @@ function safeFloat(value, fallback) {
 }
 
 const MEMORY_CEILING_MB = safeInt(process.env.MEMORY_CEILING_MB, 1024);
-const RSS_WALL_OFFSET_MB = safeInt(process.env.RSS_WALL_OFFSET_MB, 25);
-const RSS_ADMISSION_OFFSET_MB = safeInt(process.env.RSS_ADMISSION_OFFSET_MB, 60);
-const PIXEL_MEMORY_DIVISOR = safeInt(process.env.PIXEL_MEMORY_DIVISOR, 6);
+const RSS_WALL_OFFSET_MB = safeInt(process.env.RSS_WALL_OFFSET_MB, 20);
+const RSS_ADMISSION_OFFSET_MB = safeInt(process.env.RSS_ADMISSION_OFFSET_MB, 40);
+const PIXEL_MEMORY_DIVISOR = safeInt(process.env.PIXEL_MEMORY_DIVISOR, 3);
 
 let DOWNLOAD_BYTE_RATIO = safeFloat(process.env.DOWNLOAD_BYTE_RATIO, 0.35);
 let DECOMPRESS_BYTE_RATIO = safeFloat(process.env.DECOMPRESS_BYTE_RATIO, 0.50);
