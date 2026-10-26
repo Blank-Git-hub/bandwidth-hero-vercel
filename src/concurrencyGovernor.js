@@ -15,8 +15,8 @@ const ENABLED = ['1', 'true', 'yes', 'on'].includes(
 );
 
 const MIN_LIMIT = safeInt(process.env.ADAPTIVE_CONCURRENCY_MIN, 1);
-const INITIAL_LIMIT = safeInt(process.env.ADAPTIVE_CONCURRENCY_INITIAL, 2);
-const MAX_LIMIT = safeInt(process.env.ADAPTIVE_CONCURRENCY_MAX, 4);
+const INITIAL_LIMIT = safeInt(process.env.ADAPTIVE_CONCURRENCY_INITIAL, 4);
+const MAX_LIMIT = safeInt(process.env.ADAPTIVE_CONCURRENCY_MAX, 8);
 const EVENT_LOOP_MAX_MS = safeInt(process.env.ADAPTIVE_EVENT_LOOP_MAX_MS, 80);
 const RSS_SAFE_OFFSET_MB = safeInt(process.env.ADAPTIVE_RSS_SAFE_OFFSET_MB, 150);
 const COOLDOWN_MS = safeInt(process.env.ADAPTIVE_COOLDOWN_MS, 5000);
@@ -32,7 +32,7 @@ let healthyStreak = 0;
 // Encode-level adaptive concurrency
 const ENCODE_MIN_LIMIT = safeInt(process.env.ADAPTIVE_ENCODE_MIN, 1);
 const ENCODE_INITIAL_LIMIT = safeInt(process.env.ADAPTIVE_ENCODE_INITIAL, 1);
-const ENCODE_MAX_LIMIT = safeInt(process.env.ADAPTIVE_ENCODE_MAX, 2);
+const ENCODE_MAX_LIMIT = safeInt(process.env.ADAPTIVE_ENCODE_MAX, 1);
 const ENCODE_COOLDOWN_MS = safeInt(process.env.ADAPTIVE_ENCODE_COOLDOWN_MS, 8000);
 const ENCODE_TIME_THRESHOLD_MS = safeInt(process.env.ADAPTIVE_ENCODE_TIME_MS, 15000);
 
