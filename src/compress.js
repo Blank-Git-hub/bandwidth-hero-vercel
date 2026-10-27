@@ -216,6 +216,17 @@ function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
+process.on('exit', (code) => {
+  console.warn({
+    event: 'PROCESS_EXIT',
+    code,
+    activeRequests,
+    activeEncodes,
+    rssMB: memoryGovernor.getRssMB(),
+    uptimeSec: Math.floor(process.uptime())
+  }, '[PROCESS EXIT]');
+});
+
 const EXACT_CACHE_MAX_ENTRIES = safeInt(process.env.EXACT_CACHE_MAX_ENTRIES, 100);
 const EXACT_CACHE_MAX_MB = safeInt(process.env.EXACT_CACHE_MAX_MB, 128);
 
