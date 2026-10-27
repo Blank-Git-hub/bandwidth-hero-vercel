@@ -2197,5 +2197,15 @@ if (analysis.isMangaStrip) {
       encodeTimeMs: finalEncodeTime,
       eventLoopLag: typeof eventLoopLag === 'number' ? eventLoopLag : 0
     });
+
+    // ANTI-OOM SELF-RECYCLE:
+    // If RSS is dangerously high and no other requests are active,
+    // gracefully exit to force Vercel to spin up a fresh instance.
+    // This prevents the OS OOM-killer from severing active TCP sockets.
+    const currentRssMB = memGov.getRssMB();
+    if (activeRequests === 0 && currentRssMB > 950) {
+      log.warn({ event: 'SELF_RECYCLE', rssMB: currentRssMB }, '[SELF-RECYCLE] High RSS with empty queue, exiting gracefully');
+      process.exit(0);
+    }
   }
 }
