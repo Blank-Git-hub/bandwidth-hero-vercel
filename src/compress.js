@@ -1052,8 +1052,19 @@ let eventLoopLag;
     }
 
     const frames = metadata.pages || 1;
-    const width = metadata.width || 0;
-    const height = metadata.height || 0;
+    let width = metadata.width || 0;
+    let height = metadata.height || 0;
+
+    // PRE-CALCULATION DIMENSION CAP
+    // Prevents massive pixel cost calculations (e.g., 184MP for a 55k tall strip)
+    // which would instantly trigger a 503 rejection from the memory governor.
+    const PRE_CAP_MAX_DIM = 16383;
+    if (width > PRE_CAP_MAX_DIM || height > PRE_CAP_MAX_DIM) {
+      const scale = Math.min(PRE_CAP_MAX_DIM / Math.max(width, 1), PRE_CAP_MAX_DIM / Math.max(height, 1));
+      width = Math.max(1, Math.round(width * scale));
+      height = Math.max(1, Math.round(height * scale));
+    }
+    
     const metadataChannels = Math.max(
   1,
   Number(metadata.channels) || (metadata.hasAlpha ? 4 : 3)
