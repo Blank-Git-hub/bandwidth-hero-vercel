@@ -227,8 +227,8 @@ process.on('exit', (code) => {
   }, '[PROCESS EXIT]');
 });
 
-const EXACT_CACHE_MAX_ENTRIES = safeInt(process.env.EXACT_CACHE_MAX_ENTRIES, 100);
-const EXACT_CACHE_MAX_MB = safeInt(process.env.EXACT_CACHE_MAX_MB, 128);
+const EXACT_CACHE_MAX_ENTRIES = safeInt(process.env.EXACT_CACHE_MAX_ENTRIES, 30);
+const EXACT_CACHE_MAX_MB = safeInt(process.env.EXACT_CACHE_MAX_MB, 32);
 
 const exactCache = new LRUCache({
   max: EXACT_CACHE_MAX_ENTRIES,
@@ -1136,14 +1136,18 @@ totalPixelCost = Math.ceil(width * height * frames * pixelWeight);
       reqId,
       elapsedMs: Date.now() - (req.proxyStartedAt || startedAt),
       url: logUrl,
-   format: outputFormat,
-   reason: formatDecision.reason,
-   width,
-   height,
-   frames,
-   totalPixelCost,
-   avifMaxPixels: AVIF_MAX_PIXELS
- });
+      format: outputFormat,
+      reason: formatDecision.reason,
+      width,
+      height,
+      frames,
+      totalPixelCost,
+      avifMaxPixels: AVIF_MAX_PIXELS,
+      rssMB: memGov.getRssMB(),
+      availableMB: memGov.getAvailableMB(),
+      pixelBudget: memGov.getPixelBudget(),
+      activePixelCost: memGov.getActivePixelCost()
+    });
     
     const viewportCacheKey = req.opts?.maxDim > 0
   ? 'md-fixed'
