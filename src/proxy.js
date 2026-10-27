@@ -35,9 +35,9 @@ function envBoolLocal(name, fallback = false) {
   return v === '1' || v === 'true' || v === 'yes';
 }
 
-const RAW_VAULT_MAX_BYTES = 20 * 1024 * 1024;
-const RAW_VAULT_MAX_ENTRY = 4 * 1024 * 1024;
-const RAW_VAULT_MAX_ENTRIES = 30;
+const RAW_VAULT_MAX_BYTES = 8 * 1024 * 1024;
+const RAW_VAULT_MAX_ENTRY = 1 * 1024 * 1024;
+const RAW_VAULT_MAX_ENTRIES = 10;
 
 const RAW_VAULT_ENTRY_OVERHEAD = 512;
 
