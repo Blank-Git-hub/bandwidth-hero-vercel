@@ -919,9 +919,21 @@ function chooseOutputFormat(metadata, totalPixelCost) {
     return { format: 'avif', reason: 'unknown_dimensions_force_avif' };
   }
 
-  // HARD LIMIT: AVIF/WebP cannot encode dimensions > 16383px.
-  // Force JPEG immediately to prevent encoder crashes.
+  // EXTREME DIMENSION HANDLING:
+  // AVIF/WebP cannot physically encode dimensions > 16383px.
+  // Instead of immediately forcing JPEG, calculate if resizing to fit 16383px
+  // would result in acceptable dimensions (not a "blurry mess").
   if (width > AVIF_MAX_DIMENSION || height > AVIF_MAX_DIMENSION) {
+    const scale = Math.min(AVIF_MAX_DIMENSION / Math.max(width, 1), AVIF_MAX_DIMENSION / Math.max(height, 1));
+    const projectedMinDimension = Math.floor(Math.min(width, height) * scale);
+
+    // If the resized short side is still >= MIN_AVIF_RESIZED_DIMENSION (default 600px),
+    // it's safe to use AVIF. The later AVIF resize block will handle the actual scaling.
+    if (projectedMinDimension >= MIN_AVIF_RESIZED_DIMENSION) {
+      return { format: 'avif', reason: 'avif_extreme_resized_to_fit' };
+    }
+
+    // If resizing would make the short side too small (blurry mess), fallback to JPEG.
     return { format: 'jpeg', reason: 'extreme_dimension_force_jpeg' };
   }
 
@@ -1697,14 +1709,17 @@ if (analysis.isMangaStrip) {
         }
       }
 
-   if (targetWidth || targetHeight) {
-     pipeline = pipeline.resize(targetWidth, targetHeight, {
+   const HARD_MAX_DIM = 16383;
+   if (targetWidth || targetHeight || width > HARD_MAX_DIM || height > HARD_MAX_DIM) {
+     const resizeW = targetWidth || HARD_MAX_DIM;
+     const resizeH = targetHeight || HARD_MAX_DIM;
+     
+     pipeline = pipeline.resize(resizeW, resizeH, {
        fit: 'inside',
        withoutEnlargement: true,
        kernel: sharp.kernel.lanczos3,
      });
    }
-
       // Sharpen - boosted for text images and AVIF limit resizes
       const contentWantsSharpen =
         sharpenPreference !== false &&
