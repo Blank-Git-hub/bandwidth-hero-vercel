@@ -192,6 +192,16 @@ export function checkHealth() {
 
 function gracefulShutdown(signal) {
   if (isShuttingDown) return;
+
+  console.warn({
+    event: 'GRACEFUL_SHUTDOWN',
+    signal,
+    activeRequests,
+    activeEncodes,
+    rssMB: memoryGovernor.getRssMB(),
+    uptimeSec: Math.floor(process.uptime())
+  }, '[SHUTDOWN] Instance shutdown requested');
+
   isShuttingDown = true;
   const forceTimeout = setTimeout(() => process.exit(1), SHUTDOWN_TIMEOUT);
   const checkInterval = setInterval(() => {
