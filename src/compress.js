@@ -881,7 +881,10 @@ function getViewportMaxDim(req) {
   return Math.max(320, Math.min(effectiveWidth, MAX_OUTPUT_DIM));
 }
 
-function getChromaSubsampling(analysis) {
+function getChromaSubsampling(analysis, format) {
+  // JPEG bandwidth mode: always 4:2:0 for maximum savings.
+  // AVIF/WebP handle chroma internally and don't need this override.
+  if (format === 'jpeg') return '4:2:0';
   if (analysis.isColorful && analysis.sharpness > 80) return '4:4:4';
   return '4:2:0';
 }
@@ -1845,7 +1848,7 @@ if (analysis.isMangaStrip) {
                 outputBuffer = await pipeline.avif({
                   quality: Math.min(quality, 63),
                   effort: Math.min(Math.max(safeEncodeEffort, 0), 9),
-                  chromaSubsampling: getChromaSubsampling(analysis),
+                  chromaSubsampling: getChromaSubsampling(analysis, 'avif'),
                 }).toBuffer();
                 contentType = 'image/avif';
                 break;
@@ -1855,14 +1858,23 @@ if (analysis.isMangaStrip) {
                   effort: Math.min(Math.max(safeEncodeEffort, 0), 6),
                   smartSubsample: true,
                   preset: getWebpPreset(analysis, lineArtResult, origW, origH),
+                  nearLossless: false,
                 }).toBuffer();
                 contentType = 'image/webp';
                 break;
               case 'jpeg':
               default:
                 const isExtremeJpeg = width > AVIF_MAX_DIMENSION || height > AVIF_MAX_DIMENSION;
-                const jpegQuality = isExtremeJpeg ? Math.min(quality, 75) : quality;
-                const jpegChroma = isExtremeJpeg ? '4:2:0' : getChromaSubsampling(analysis);
+
+                // Bandwidth-optimized JPEG quality:
+                // Manga/line art tolerates lower quality than photos.
+                // Reduce by 2 for manga strips to squeeze more bytes.
+                let jpegQuality = isExtremeJpeg ? Math.min(quality, 75) : quality;
+                if (!isExtremeJpeg && (analysis.isMangaStrip || analysis.isMangaPage || analysis.isMangaWidePage || analysis.isGrayscale)) {
+                  jpegQuality = Math.max(1, jpegQuality - 2);
+                }
+
+                const jpegChroma = getChromaSubsampling(analysis, 'jpeg');
 
                 outputBuffer = await pipeline.jpeg({
                   quality: jpegQuality,
@@ -1877,6 +1889,7 @@ if (analysis.isMangaStrip) {
                 if (isExtremeJpeg) {
                   res.setHeader('X-Extreme-JPEG', 'OPTIMIZED');
                 }
+                res.setHeader('X-Jpeg-Bandwidth-Mode', 'ACTIVE');
                 break;
             }
           } finally {
@@ -1904,8 +1917,13 @@ if (analysis.isMangaStrip) {
             case 'jpeg':
               default:
                 const isExtremeJpeg = width > AVIF_MAX_DIMENSION || height > AVIF_MAX_DIMENSION;
-                const jpegQuality = isExtremeJpeg ? Math.min(quality, 75) : quality;
-                const jpegChroma = isExtremeJpeg ? '4:2:0' : getChromaSubsampling(analysis);
+
+                let jpegQuality = isExtremeJpeg ? Math.min(quality, 75) : quality;
+                if (!isExtremeJpeg && (analysis.isMangaStrip || analysis.isMangaPage || analysis.isMangaWidePage || analysis.isGrayscale)) {
+                  jpegQuality = Math.max(1, jpegQuality - 2);
+                }
+
+                const jpegChroma = getChromaSubsampling(analysis, 'jpeg');
 
                 outputBuffer = await pipeline.jpeg({
                   quality: jpegQuality,
@@ -1920,6 +1938,7 @@ if (analysis.isMangaStrip) {
                 if (isExtremeJpeg) {
                   res.setHeader('X-Extreme-JPEG', 'OPTIMIZED');
                 }
+                res.setHeader('X-Jpeg-Bandwidth-Mode', 'ACTIVE');
                 break;
           }
         }
