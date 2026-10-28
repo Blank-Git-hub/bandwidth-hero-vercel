@@ -40,7 +40,7 @@ async function generateExactHash(buffer) {
 const MAX_OUTPUT_DIM = safeInt(process.env.MAX_OUTPUT_DIM, 2560);
 const DEFAULT_QUALITY = safeInt(process.env.DEFAULT_QUALITY, 55);
 const MAX_STRIP_WIDTH = safeInt(process.env.MAX_STRIP_WIDTH, 1600);
-const MAX_ANIMATION_FRAMES = safeInt(process.env.MAX_ANIMATION_FRAMES, 300);
+const MAX_ANIMATION_FRAMES = safeInt(process.env.MAX_ANIMATION_FRAMES, 2147483647);
 const VIEWPORT_FALLBACK = safeInt(process.env.VIEWPORT_FALLBACK, 1080);
 const HEALTH_LAG_THRESHOLD = safeInt(process.env.HEALTH_LAG_THRESHOLD, 100);
 const SHUTDOWN_TIMEOUT = safeInt(process.env.SHUTDOWN_TIMEOUT, 10000);
@@ -609,6 +609,17 @@ function verifyOutput(buffer, format) {
 
 function getWebpPreset(analysis, lineArtResult, origW, origH) {
   if (!ENABLE_WEBP_PRESET) return 'default';
+
+  // Manga/grayscale line art benefits from the drawing preset.
+  if (
+    analysis.isMangaStrip ||
+    analysis.isMangaPage ||
+    analysis.isMangaWidePage ||
+    analysis.isGrayscale
+  ) {
+    return 'drawing';
+  }
+
   if (lineArtResult && lineArtResult.isLineArt && lineArtResult.confidence > 0.85) return 'drawing';
   if (analysis.isAnime) return 'picture';
   if (analysis.entropy > 7.5) return 'photo';
@@ -1451,10 +1462,8 @@ eventLoopLag = await measureEventLoopLag();
       }
       
       const frameCount = metadata.pages || 1;
-   if (isAnimated && frameCount > MAX_ANIMATION_FRAMES) {
-        res.setHeader('X-Frame-Cap', 'TRUNCATED');
-        if (ENABLE_ORACLE_LEDGER) metrics.totalBytesOut += buffer.length;
-        return buffer;
+      if (isAnimated && frameCount > MAX_ANIMATION_FRAMES) {
+        res.setHeader('X-Frame-Cap', 'EXCEEDED_ATTEMPTING_ENCODE');
       }
 
       // Banding exorcist check
@@ -1858,7 +1867,7 @@ if (analysis.isMangaStrip) {
                   effort: Math.min(Math.max(safeEncodeEffort, 0), 6),
                   smartSubsample: true,
                   preset: getWebpPreset(analysis, lineArtResult, origW, origH),
-                  nearLossless: false,
+                  minSize: parseTriState(req.query?.minsize, false),
                 }).toBuffer();
                 contentType = 'image/webp';
                 break;
@@ -1911,7 +1920,8 @@ if (analysis.isMangaStrip) {
                 effort: Math.min(Math.max(safeEncodeEffort, 0), 6),
                 smartSubsample: true,
                 preset: getWebpPreset(analysis, lineArtResult, origW, origH),
-              }).toBuffer();
+                  minSize: parseTriState(req.query?.minsize, false),
+                }).toBuffer();
               contentType = 'image/webp';
               break;
             case 'jpeg':
