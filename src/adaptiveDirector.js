@@ -1,5 +1,3 @@
-// src/adaptiveDirector.js
-
 function safeInt(value, fallback) {
   const n = parseInt(value, 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
