@@ -1736,7 +1736,8 @@ if (analysis.isMangaStrip) {
       const contentWantsSharpen =
         sharpenPreference !== false &&
         (
-          ((analysis.sharpness < 50 || isTextHeavy || analysis.isMangaWidePage) && !analysis.isMangaStrip) ||
+          isTextHeavy ||
+          ((analysis.sharpness < 50 || analysis.isMangaWidePage) && !analysis.isMangaStrip) ||
           (avifLimitResize && analysis.isMangaStrip)
         );
 
