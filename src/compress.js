@@ -23,6 +23,16 @@ function envBool(name, fallback = false) {
   return v === '1' || v === 'true' || v === 'yes';
 }
 
+async function getTmpFreeMB() {
+  try {
+    const { statfs } = await import('node:fs/promises');
+    const stats = await statfs('/tmp');
+    return Math.floor((stats.bavail * stats.bsize) / (1024 * 1024));
+  } catch {
+    return -1;
+  }
+}
+
 sharp.cache({ memory: 0, files: 0, items: 0 });
 
 async function generateExactHash(buffer) {
@@ -215,6 +225,51 @@ function gracefulShutdown(signal) {
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// RESOURCE WATCHDOG:
+// If the instance is idle and /tmp or RSS is exhausted, recycle cleanly.
+setInterval(async () => {
+  if (isShuttingDown || activeRequests > 0 || activeEncodes > 0) return;
+
+  // Best-effort cleanup of stale libvips temp files.
+  try {
+    const { readdirSync, statSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const now = Date.now();
+
+    for (const entry of readdirSync('/tmp')) {
+      if (!entry.startsWith('vips-')) continue;
+
+      const fullPath = join('/tmp', entry);
+
+      try {
+        const st = statSync(fullPath);
+
+        if (now - st.mtimeMs > 5 * 60 * 1000) {
+          rmSync(fullPath, { recursive: true, force: true });
+        }
+      } catch {}
+    }
+  } catch {}
+
+  const tmpFreeMB = await getTmpFreeMB();
+  const rssMB = memoryGovernor.getRssMB();
+
+  const tmpLow = tmpFreeMB >= 0 && tmpFreeMB < 64;
+  const rssHigh = rssMB > 950;
+
+  if (tmpLow || rssHigh) {
+    console.warn({
+      event: 'RESOURCE_SELF_RECYCLE',
+      rssMB,
+      tmpFreeMB,
+      activeRequests,
+      activeEncodes
+    }, '[RESOURCE SELF-RECYCLE] Idle instance resource pressure, exiting gracefully');
+
+    process.exit(0);
+  }
+}, 10000).unref();
 
 process.on('exit', (code) => {
   console.warn({
@@ -2221,7 +2276,15 @@ if (analysis.isMangaStrip) {
     }
 
     const safeMessage = err?.message ? String(err.message).split('?')[0] : 'Unknown compress error';
-    log.error({ reqId, watchdog, error: safeMessage }, '[WATCHDOG_FATAL]');
+    const tmpFreeMB = await getTmpFreeMB();
+
+    log.error({
+      reqId,
+      watchdog,
+      error: safeMessage,
+      tmpFreeMB,
+      rssMB: memGov.getRssMB()
+    }, '[WATCHDOG_FATAL]');
     res.setHeader('X-Compression', 'FAILED');
 
     if (ENABLE_ORACLE_LEDGER) {
