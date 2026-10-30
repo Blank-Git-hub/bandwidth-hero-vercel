@@ -1029,7 +1029,7 @@ function chooseOutputFormat(metadata, totalPixelCost) {
 // FEATURE: Animated Frame Splicing (60fps -> <=15fps)
 // Uses sharp's native array join syntax: sharp([buf1, buf2], { join: { animated: true } })
 // ============================================================
-const SPLICE_TARGET_FRAME_MS = safeInt(process.env.SPLICE_TARGET_FRAME_MS, 33);
+const SPLICE_TARGET_FRAME_MS = safeInt(process.env.SPLICE_TARGET_FRAME_MS, 66);
 const SPLICE_MAX_RAW_MB = safeInt(process.env.SPLICE_MAX_RAW_MB, 800);
 
 function computeSpliceStride(delays, frames) {
