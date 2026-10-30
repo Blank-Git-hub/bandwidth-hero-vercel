@@ -1128,6 +1128,10 @@ async function spliceAnimatedFrames(buffer, metadata, log, reqId) {
   // 4. Patch per-frame durations in the RIFF container
   const patched = patchWebpFrameDurations(joinedBuffer, keptDelays);
 
+  // Aggressively drop references to massive buffers to hint the Garbage Collector
+  // before the main pipeline checks RSS for SELF_RECYCLE.
+  frameBuffers.length = 0; 
+
   if (ENABLE_ORACLE_LEDGER) metrics.frameDrops += (frames - keptIndices.length);
   log.info({ event: 'FRAME_SPLICE', reqId, framesIn: frames, framesOut: keptIndices.length, stride }, '[FRAME-SPLICE]');
 
