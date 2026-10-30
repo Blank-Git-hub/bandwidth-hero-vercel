@@ -1811,6 +1811,12 @@ if (adaptive.risk === 'budget_exceeded') {
   if (effortZeroPrediction > budget.budgetMs) {
     // Still over budget. Shrink dimensions to fit.
     watchdogScaleFactor = Math.sqrt(budget.budgetMs / effortZeroPrediction);
+    
+    // ANIMATED PENALTY: Force extra shrink for animations to guarantee <60s encode
+    if (isAnimated) {
+      watchdogScaleFactor *= 0.7; // 30% additional shrink
+    }
+    
     watchdogScaleFactor = Math.max(0.25, Math.min(watchdogScaleFactor, 1));
     res.setHeader('X-Watchdog', `SHRINK_${Math.round(watchdogScaleFactor * 100)}%`);
   }
