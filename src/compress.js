@@ -1072,6 +1072,9 @@ function patchWebpFrameDurations(buffer, delaysMs) {
   return out;
 }
 
+const SPLICE_TARGET_FRAME_MS = safeInt(process.env.SPLICE_TARGET_FRAME_MS, 33);
+const SPLICE_CHUNK_SIZE = safeInt(process.env.SPLICE_CHUNK_SIZE, 16);
+
 async function spliceAnimatedFrames(buffer, metadata, log, reqId) {
   const frames = metadata.pages || 1;
   if (frames < Math.max(2, FRAME_DROP_THRESHOLD)) return null;
@@ -1084,18 +1087,6 @@ async function spliceAnimatedFrames(buffer, metadata, log, reqId) {
   const pageHeight = metadata.pageHeight || metadata.height || 0;
   if (width <= 0 || pageHeight <= 0) return null;
 
-  const estimatedRawMB = Math.ceil((width * pageHeight * frames * 4) / (1024 * 1024));
-  if (estimatedRawMB > SPLICE_MAX_RAW_MB) return null;
-
-  const { data, info } = await sharp(buffer, { animated: true, limitInputPixels: 0 })
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const channels = info.channels;
-  const frameBytes = pageHeight * info.width * channels;
-  if (frameBytes <= 0 || data.length < frameBytes * frames) return null;
-
   const keptIndices = [];
   for (let i = 0; i < frames; i += stride) keptIndices.push(i);
   if (keptIndices[keptIndices.length - 1] !== frames - 1) keptIndices.push(frames - 1);
@@ -1107,19 +1098,49 @@ async function spliceAnimatedFrames(buffer, metadata, log, reqId) {
     return isTrailingExtra ? own : own * stride;
   });
 
-  const frameBuffers = await Promise.all(keptIndices.map((idx) => {
-    const start = idx * frameBytes;
-    const frameRaw = Buffer.from(data.subarray(start, start + frameBytes));
-    return sharp(frameRaw, { raw: { width: info.width, height: pageHeight, channels } })
-      .webp({ lossless: true, effort: 0 })
-      .toBuffer();
-  }));
+  const keptFrameBuffers = new Array(keptIndices.length).fill(null);
+  const chunkSize = Math.max(1, SPLICE_CHUNK_SIZE);
+
+  // Decode 16 frames at a time (~48MB), keep what we need, release the rest.
+  for (let chunkStart = 0; chunkStart < frames; chunkStart += chunkSize) {
+    const pageCount = Math.min(chunkSize, frames - chunkStart);
+
+    let chunk;
+    try {
+      chunk = await sharp(buffer, {
+        limitInputPixels: 0,
+        page: chunkStart,
+        pages: pageCount
+      }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    } catch (chunkErr) {
+      log.warn({ reqId, error: String(chunkErr?.message || chunkErr).split('?')[0], chunkStart }, '[FRAME-SPLICE-CHUNK-FAIL]');
+      return null;
+    }
+
+    const { data, info } = chunk;
+    const channels = info.channels;
+    const frameBytes = pageHeight * info.width * channels;
+
+    for (let k = 0; k < keptIndices.length; k++) {
+      const idx = keptIndices[k];
+      if (idx < chunkStart || idx >= chunkStart + pageCount) continue;
+      const start = (idx - chunkStart) * frameBytes;
+      const end = start + frameBytes;
+      if (end > data.length) continue;
+      const frameRaw = Buffer.from(data.subarray(start, end));
+      keptFrameBuffers[k] = await sharp(frameRaw, {
+        raw: { width: info.width, height: pageHeight, channels }
+      }).webp({ lossless: true, effort: 0 }).toBuffer();
+    }
+  }
+
+  if (keptFrameBuffers.some((b) => !b)) return null;
 
   const joinedBuffer = await sharp.join({
-    input: frameBuffers,
-    width: info.width,
+    input: keptFrameBuffers,
+    width,
     height: pageHeight,
-    channels
+    channels: 4
   }).webp({ lossless: true, effort: 0 }).toBuffer();
 
   const joinedMeta = await sharp(joinedBuffer).metadata();
@@ -1128,16 +1149,7 @@ async function spliceAnimatedFrames(buffer, metadata, log, reqId) {
   const patched = patchWebpFrameDurations(joinedBuffer, keptDelays);
 
   if (ENABLE_ORACLE_LEDGER) metrics.frameDrops += (frames - keptIndices.length);
-  log.info({
-    event: 'FRAME_SPLICE',
-    reqId,
-    framesIn: frames,
-    framesOut: keptIndices.length,
-    stride,
-    avgDelayInMs: delays.length
-      ? Math.round(delays.reduce((a, b) => a + (Number(b) || 0), 0) / delays.length)
-      : null
-  }, '[FRAME-SPLICE]');
+  log.info({ event: 'FRAME_SPLICE', reqId, framesIn: frames, framesOut: keptIndices.length, stride }, '[FRAME-SPLICE]');
 
   return patched;
 }
