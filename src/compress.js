@@ -1089,35 +1089,44 @@ async function spliceAnimatedFrames(buffer, metadata, log, reqId) {
   const estimatedRawMB = Math.ceil((width * pageHeight * frames * 4) / (1024 * 1024));
   if (estimatedRawMB > SPLICE_MAX_RAW_MB) return null;
 
-  // 1. Decode every frame once into a tall RGBA buffer.
-  const { data, info } = await sharp(buffer, { animated: true, limitInputPixels: 0 })
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
+  // CHUNKED DECODE: Process 16 frames at a time to keep peak RAM under ~50MB
+  const CHUNK_SIZE = 16;
+  const frameBuffers = new Array(keptIndices.length).fill(null);
 
-  const channels = info.channels;
-  const frameBytes = pageHeight * info.width * channels;
-  if (frameBytes <= 0 || data.length < frameBytes * frames) return null;
+  for (let chunkStart = 0; chunkStart < frames; chunkStart += CHUNK_SIZE) {
+    const chunkSize = Math.min(CHUNK_SIZE, frames - chunkStart);
 
-  // 2. Extract kept frames and encode them to fast intermediate WebP buffers.
-  const frameBuffers = [];
-  for (let k = 0; k < keptIndices.length; k++) {
-    const idx = keptIndices[k];
-    const start = idx * frameBytes;
-    const end = start + frameBytes;
-    if (end > data.length) continue;
-    
-    const frameRaw = Buffer.from(data.subarray(start, end));
-    const frameBuf = await sharp(frameRaw, {
-      raw: { width: info.width, height: pageHeight, channels }
-    }).webp({ lossless: false, quality: 80, effort: 0 }).toBuffer();
-    
-    frameBuffers.push(frameBuf);
+    // Decode only this chunk of frames
+    const { data, info } = await sharp(buffer, {
+      animated: true,
+      limitInputPixels: 0,
+      page: chunkStart,
+      pages: chunkSize
+    }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+
+    const chunkFrameBytes = info.width * pageHeight * info.channels;
+
+    // Extract the kept frames that fall within this chunk
+    for (let k = 0; k < keptIndices.length; k++) {
+      const idx = keptIndices[k];
+      if (idx < chunkStart || idx >= chunkStart + chunkSize) continue;
+
+      const offsetInChunk = idx - chunkStart;
+      const start = offsetInChunk * chunkFrameBytes;
+      const end = start + chunkFrameBytes;
+      if (end > data.length) continue;
+
+      const frameRaw = Buffer.from(data.subarray(start, end));
+      frameBuffers[k] = await sharp(frameRaw, {
+        raw: { width: info.width, height: pageHeight, channels: info.channels }
+      }).webp({ lossless: false, quality: 80, effort: 0 }).toBuffer();
+    }
+    // data goes out of scope here, chunk buffer is released
   }
 
-  if (frameBuffers.length !== keptIndices.length) return null;
+  if (frameBuffers.some((b) => !b)) return null;
 
-  // 3. Join the frames using sharp's official array syntax
+  // Join the frames using sharp's official array syntax
   const joinedBuffer = await sharp(frameBuffers, { join: { animated: true } })
     .webp({ lossless: false, quality: 80, effort: 0 })
     .toBuffer();
@@ -1125,12 +1134,11 @@ async function spliceAnimatedFrames(buffer, metadata, log, reqId) {
   const joinedMeta = await sharp(joinedBuffer).metadata();
   if ((joinedMeta.pages || 1) !== keptIndices.length) return null;
 
-  // 4. Patch per-frame durations in the RIFF container
+  // Patch per-frame durations in the RIFF container
   const patched = patchWebpFrameDurations(joinedBuffer, keptDelays);
 
-  // Aggressively drop references to massive buffers to hint the Garbage Collector
-  // before the main pipeline checks RSS for SELF_RECYCLE.
-  frameBuffers.length = 0; 
+  // Aggressively drop references to help the Garbage Collector
+  frameBuffers.length = 0;
 
   if (ENABLE_ORACLE_LEDGER) metrics.frameDrops += (frames - keptIndices.length);
   log.info({ event: 'FRAME_SPLICE', reqId, framesIn: frames, framesOut: keptIndices.length, stride }, '[FRAME-SPLICE]');
