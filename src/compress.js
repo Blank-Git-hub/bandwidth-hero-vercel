@@ -1026,20 +1026,15 @@ function chooseOutputFormat(metadata, totalPixelCost) {
 }
 
 // ============================================================
-// FEATURE: Animated Frame Splicing (60fps -> <=30fps)
-// Keeps every Nth frame, scales kept-frame durations by N,
-// preserves total playback duration. Pure sharp + RIFF surgery.
-// Never rejects: any failure returns null, caller keeps original.
+// FEATURE: Animated Frame Splicing (60fps -> <=15fps)
+// Uses sharp's native array join syntax: sharp([buf1, buf2], { join: { animated: true } })
 // ============================================================
-const SPLICE_TARGET_FRAME_MS = safeInt(process.env.SPLICE_TARGET_FRAME_MS, 66);
+const SPLICE_TARGET_FRAME_MS = safeInt(process.env.SPLICE_TARGET_FRAME_MS, 33);
 const SPLICE_MAX_RAW_MB = safeInt(process.env.SPLICE_MAX_RAW_MB, 800);
 
 function computeSpliceStride(delays, frames) {
   if (!Array.isArray(delays) || delays.length === 0 || frames < 2) return 1;
-  const valid = delays
-    .slice(0, frames)
-    .map((d) => Number(d))
-    .filter((d) => Number.isFinite(d) && d > 0);
+  const valid = delays.slice(0, frames).map((d) => Number(d)).filter((d) => Number.isFinite(d) && d > 0);
   if (valid.length === 0) return 1;
   const avgDelay = valid.reduce((sum, d) => sum + d, 0) / valid.length;
   if (avgDelay >= SPLICE_TARGET_FRAME_MS) return 1;
@@ -1057,11 +1052,7 @@ function patchWebpFrameDurations(buffer, delaysMs) {
     const fourcc = out.toString('ascii', offset, offset + 4);
     const chunkSize = out.readUInt32LE(offset + 4);
     const payloadStart = offset + 8;
-    if (
-      fourcc === 'ANMF' &&
-      payloadStart + 16 <= out.length &&
-      frameIndex < delaysMs.length
-    ) {
+    if (fourcc === 'ANMF' && payloadStart + 16 <= out.length && frameIndex < delaysMs.length) {
       const ms = Math.max(0, Math.min(0xFFFFFF, Math.round(Number(delaysMs[frameIndex]) || 0)));
       out.writeUIntLE(ms, payloadStart + 12, 3);
       frameIndex++;
@@ -1071,8 +1062,6 @@ function patchWebpFrameDurations(buffer, delaysMs) {
   }
   return out;
 }
-
-const SPLICE_CHUNK_SIZE = safeInt(process.env.SPLICE_CHUNK_SIZE, 16);
 
 async function spliceAnimatedFrames(buffer, metadata, log, reqId) {
   const frames = metadata.pages || 1;
@@ -1097,57 +1086,46 @@ async function spliceAnimatedFrames(buffer, metadata, log, reqId) {
     return isTrailingExtra ? own : own * stride;
   });
 
-  const keptFrameBuffers = new Array(keptIndices.length).fill(null);
-  const chunkSize = Math.max(1, SPLICE_CHUNK_SIZE);
+  const estimatedRawMB = Math.ceil((width * pageHeight * frames * 4) / (1024 * 1024));
+  if (estimatedRawMB > SPLICE_MAX_RAW_MB) return null;
 
-  // Decode 16 frames at a time (~48MB), keep what we need, release the rest.
-  for (let chunkStart = 0; chunkStart < frames; chunkStart += chunkSize) {
-    const pageCount = Math.min(chunkSize, frames - chunkStart);
+  // 1. Decode every frame once into a tall RGBA buffer.
+  const { data, info } = await sharp(buffer, { animated: true, limitInputPixels: 0 })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
 
-    let chunk;
-    try {
-      chunk = await sharp(buffer, {
-        limitInputPixels: 0,
-        page: chunkStart,
-        pages: pageCount
-      }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-    } catch (chunkErr) {
-      log.warn({ reqId, error: String(chunkErr?.message || chunkErr).split('?')[0], chunkStart }, '[FRAME-SPLICE-CHUNK-FAIL]');
-      return null;
-    }
+  const channels = info.channels;
+  const frameBytes = pageHeight * info.width * channels;
+  if (frameBytes <= 0 || data.length < frameBytes * frames) return null;
 
-    const { data, info } = chunk;
-    const channels = info.channels;
-    const frameBytes = pageHeight * info.width * channels;
-
-    for (let k = 0; k < keptIndices.length; k++) {
-      const idx = keptIndices[k];
-      if (idx < chunkStart || idx >= chunkStart + pageCount) continue;
-      const start = (idx - chunkStart) * frameBytes;
-      const end = start + frameBytes;
-      if (end > data.length) continue;
-      const frameRaw = Buffer.from(data.subarray(start, end));
-      
-      // FAST LOSSY ENCODING for intermediate buffer (saves ~40s CPU time)
-      keptFrameBuffers[k] = await sharp(frameRaw, {
-        raw: { width: info.width, height: pageHeight, channels }
-      }).webp({ lossless: false, quality: 80, effort: 0 }).toBuffer();
-    }
+  // 2. Extract kept frames and encode them to fast intermediate WebP buffers.
+  const frameBuffers = [];
+  for (let k = 0; k < keptIndices.length; k++) {
+    const idx = keptIndices[k];
+    const start = idx * frameBytes;
+    const end = start + frameBytes;
+    if (end > data.length) continue;
+    
+    const frameRaw = Buffer.from(data.subarray(start, end));
+    const frameBuf = await sharp(frameRaw, {
+      raw: { width: info.width, height: pageHeight, channels }
+    }).webp({ lossless: false, quality: 80, effort: 0 }).toBuffer();
+    
+    frameBuffers.push(frameBuf);
   }
 
-  if (keptFrameBuffers.some((b) => !b)) return null;
+  if (frameBuffers.length !== keptIndices.length) return null;
 
-  // FAST LOSSY ENCODING for the joined buffer
-  const joinedBuffer = await sharp.join({
-    input: keptFrameBuffers,
-    width,
-    height: pageHeight,
-    channels: 4
-  }).webp({ lossless: false, quality: 80, effort: 0 }).toBuffer();
+  // 3. Join the frames using sharp's official array syntax
+  const joinedBuffer = await sharp(frameBuffers, { join: { animated: true } })
+    .webp({ lossless: false, quality: 80, effort: 0 })
+    .toBuffer();
 
   const joinedMeta = await sharp(joinedBuffer).metadata();
   if ((joinedMeta.pages || 1) !== keptIndices.length) return null;
 
+  // 4. Patch per-frame durations in the RIFF container
   const patched = patchWebpFrameDurations(joinedBuffer, keptDelays);
 
   if (ENABLE_ORACLE_LEDGER) metrics.frameDrops += (frames - keptIndices.length);
@@ -1407,12 +1385,8 @@ const paramFingerprint = [
     }
   }
 
-  if ((metadata.pages || 1) > 1 && ENABLE_FRAME_DROPPING) {
-    if (signal.aborted) {
-      res.setHeader('X-Timeout-Guillotine', 'ABORTED');
-      res.status(499);
-      return Buffer.alloc(0);
-    }
+    if ((metadata.pages || 1) > 1 && ENABLE_FRAME_DROPPING) {
+    if (signal.aborted) { res.setHeader('X-Timeout-Guillotine', 'ABORTED'); res.status(499); return Buffer.alloc(0); }
     try {
       const preSpliceFrames = metadata.pages || 1;
       const splicedBuffer = await spliceAnimatedFrames(buffer, metadata, log, reqId);
@@ -1424,12 +1398,9 @@ const paramFingerprint = [
         res.setHeader('X-Frame-Splice', `${preSpliceFrames}->${frames}`);
       }
     } catch (spliceErr) {
-      log.warn({
-        reqId,
-        error: String(spliceErr?.message || spliceErr).split('?')[0]
-      }, '[FRAME-SPLICE-FALLBACK]');
+      log.warn({ reqId, error: String(spliceErr?.message || spliceErr).split('?')[0] }, '[FRAME-SPLICE-FALLBACK]');
     }
-  }
+    }
 
   let thumbResult = null;
     if ((ENABLE_VOID_WATCHER || ENABLE_PALETTE || ENABLE_PLACEHOLDER) && allowEnhancements) {
@@ -1862,12 +1833,18 @@ const effectiveMaxDim = (req.opts?.maxDim > 0)
 if (analysis.isMangaStrip) {
   if (effectiveStripWidth > 0 && baseW > effectiveStripWidth) {
     targetWidth = effectiveStripWidth;
+  } else if (watchdogScaleFactor < 1) {
+    targetWidth = baseW;
+    targetHeight = baseH;
   }
 } else {
   if (effectiveMaxDim > 0 && (baseW > effectiveMaxDim || baseH > effectiveMaxDim)) {
     const scale = Math.min(effectiveMaxDim / baseW, effectiveMaxDim / baseH);
     targetWidth = Math.round(baseW * scale);
     targetHeight = Math.round(baseH * scale);
+  } else if (watchdogScaleFactor < 1) {
+    targetWidth = baseW;
+    targetHeight = baseH;
   }
 }
 
