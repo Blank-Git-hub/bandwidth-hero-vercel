@@ -1024,6 +1024,124 @@ function chooseOutputFormat(metadata, totalPixelCost) {
 
   return { format: 'avif', reason: 'avif_resized_to_fit' };
 }
+
+// ============================================================
+// FEATURE: Animated Frame Splicing (60fps -> <=30fps)
+// Keeps every Nth frame, scales kept-frame durations by N,
+// preserves total playback duration. Pure sharp + RIFF surgery.
+// Never rejects: any failure returns null, caller keeps original.
+// ============================================================
+const SPLICE_TARGET_FRAME_MS = safeInt(process.env.SPLICE_TARGET_FRAME_MS, 33);
+const SPLICE_MAX_RAW_MB = safeInt(process.env.SPLICE_MAX_RAW_MB, 800);
+
+function computeSpliceStride(delays, frames) {
+  if (!Array.isArray(delays) || delays.length === 0 || frames < 2) return 1;
+  const valid = delays
+    .slice(0, frames)
+    .map((d) => Number(d))
+    .filter((d) => Number.isFinite(d) && d > 0);
+  if (valid.length === 0) return 1;
+  const avgDelay = valid.reduce((sum, d) => sum + d, 0) / valid.length;
+  if (avgDelay >= SPLICE_TARGET_FRAME_MS) return 1;
+  return Math.max(2, Math.ceil(SPLICE_TARGET_FRAME_MS / avgDelay));
+}
+
+function patchWebpFrameDurations(buffer, delaysMs) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 16) return buffer;
+  if (buffer.toString('ascii', 0, 4) !== 'RIFF') return buffer;
+  if (buffer.toString('ascii', 8, 12) !== 'WEBP') return buffer;
+  const out = Buffer.from(buffer);
+  let offset = 12;
+  let frameIndex = 0;
+  while (offset + 8 <= out.length) {
+    const fourcc = out.toString('ascii', offset, offset + 4);
+    const chunkSize = out.readUInt32LE(offset + 4);
+    const payloadStart = offset + 8;
+    if (
+      fourcc === 'ANMF' &&
+      payloadStart + 16 <= out.length &&
+      frameIndex < delaysMs.length
+    ) {
+      const ms = Math.max(0, Math.min(0xFFFFFF, Math.round(Number(delaysMs[frameIndex]) || 0)));
+      out.writeUIntLE(ms, payloadStart + 12, 3);
+      frameIndex++;
+    }
+    if (chunkSize <= 0) break;
+    offset = payloadStart + chunkSize + (chunkSize % 2);
+  }
+  return out;
+}
+
+async function spliceAnimatedFrames(buffer, metadata, log, reqId) {
+  const frames = metadata.pages || 1;
+  if (frames < Math.max(2, FRAME_DROP_THRESHOLD)) return null;
+
+  const delays = Array.isArray(metadata.delay) ? metadata.delay : [];
+  const stride = computeSpliceStride(delays, frames);
+  if (stride < 2) return null;
+
+  const width = metadata.width || 0;
+  const pageHeight = metadata.pageHeight || metadata.height || 0;
+  if (width <= 0 || pageHeight <= 0) return null;
+
+  const estimatedRawMB = Math.ceil((width * pageHeight * frames * 4) / (1024 * 1024));
+  if (estimatedRawMB > SPLICE_MAX_RAW_MB) return null;
+
+  const { data, info } = await sharp(buffer, { animated: true, limitInputPixels: 0 })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const channels = info.channels;
+  const frameBytes = pageHeight * info.width * channels;
+  if (frameBytes <= 0 || data.length < frameBytes * frames) return null;
+
+  const keptIndices = [];
+  for (let i = 0; i < frames; i += stride) keptIndices.push(i);
+  if (keptIndices[keptIndices.length - 1] !== frames - 1) keptIndices.push(frames - 1);
+  if (keptIndices.length < 2 || keptIndices.length >= frames) return null;
+
+  const keptDelays = keptIndices.map((idx, k) => {
+    const own = Number(delays[idx]) > 0 ? Number(delays[idx]) : SPLICE_TARGET_FRAME_MS;
+    const isTrailingExtra = k === keptIndices.length - 1 && idx % stride !== 0;
+    return isTrailingExtra ? own : own * stride;
+  });
+
+  const frameBuffers = await Promise.all(keptIndices.map((idx) => {
+    const start = idx * frameBytes;
+    const frameRaw = Buffer.from(data.subarray(start, start + frameBytes));
+    return sharp(frameRaw, { raw: { width: info.width, height: pageHeight, channels } })
+      .webp({ lossless: true, effort: 0 })
+      .toBuffer();
+  }));
+
+  const joinedBuffer = await sharp.join({
+    input: frameBuffers,
+    width: info.width,
+    height: pageHeight,
+    channels
+  }).webp({ lossless: true, effort: 0 }).toBuffer();
+
+  const joinedMeta = await sharp(joinedBuffer).metadata();
+  if ((joinedMeta.pages || 1) !== keptIndices.length) return null;
+
+  const patched = patchWebpFrameDurations(joinedBuffer, keptDelays);
+
+  if (ENABLE_ORACLE_LEDGER) metrics.frameDrops += (frames - keptIndices.length);
+  log.info({
+    event: 'FRAME_SPLICE',
+    reqId,
+    framesIn: frames,
+    framesOut: keptIndices.length,
+    stride,
+    avgDelayInMs: delays.length
+      ? Math.round(delays.reduce((a, b) => a + (Number(b) || 0), 0) / delays.length)
+      : null
+  }, '[FRAME-SPLICE]');
+
+  return patched;
+}
+
 // ============================================================
 // MAIN COMPRESS FUNCTION
 // ============================================================
@@ -1110,7 +1228,7 @@ let eventLoopLag;
       return Buffer.alloc(0);
     }
 
-    const metadata = await sharp(buffer).metadata();
+    let metadata = await sharp(buffer).metadata();
     const format = metadata.format;
 
     if (!format || format === 'raw') return buffer;
@@ -1132,7 +1250,7 @@ let eventLoopLag;
       return Buffer.alloc(0);
     }
 
-    const frames = metadata.pages || 1;
+    let frames = metadata.pages || 1;
     let width = metadata.width || 0;
     let height = metadata.height || 0;
 
@@ -1272,10 +1390,34 @@ const paramFingerprint = [
           metrics.totalBytesSaved += buffer.length - exactHit.buffer.length;
         }
         return exactHit.buffer;
-      }
     }
+  }
 
-    let thumbResult = null;
+  if ((metadata.pages || 1) > 1 && ENABLE_FRAME_DROPPING) {
+    if (signal.aborted) {
+      res.setHeader('X-Timeout-Guillotine', 'ABORTED');
+      res.status(499);
+      return Buffer.alloc(0);
+    }
+    try {
+      const preSpliceFrames = metadata.pages || 1;
+      const splicedBuffer = await spliceAnimatedFrames(buffer, metadata, log, reqId);
+      if (splicedBuffer && splicedBuffer.length > 0) {
+        buffer = splicedBuffer;
+        metadata = await sharp(buffer).metadata();
+        frames = metadata.pages || 1;
+        totalPixelCost = Math.ceil(width * height * frames * pixelWeight);
+        res.setHeader('X-Frame-Splice', `${preSpliceFrames}->${frames}`);
+      }
+    } catch (spliceErr) {
+      log.warn({
+        reqId,
+        error: String(spliceErr?.message || spliceErr).split('?')[0]
+      }, '[FRAME-SPLICE-FALLBACK]');
+    }
+  }
+
+  let thumbResult = null;
     if ((ENABLE_VOID_WATCHER || ENABLE_PALETTE || ENABLE_PLACEHOLDER) && allowEnhancements) {
       phaseStart = Date.now();
       thumbResult = await generatePlaceholderAndPalette(buffer);
@@ -1667,15 +1809,16 @@ if (adaptive.risk === 'budget_exceeded') {
   res.setHeader('X-Watchdog', 'EFFORT_FORCED_0');
 
   const effortZeroPrediction = adaptiveDirector.predictEncodeMs({
-    format: outputFormat,
-    width,
-    height,
-    frames,
-    pixelCost: totalPixelCost,
-    effort: 0,
-    pressure: adaptivePressure
-  });
-
+      format: outputFormat,
+      width,
+      height,
+      frames,
+      pixelCost: totalPixelCost,
+      inputFormat: req.opts?.originType || 'image/jpeg',
+      effort: 0,
+      pressure: adaptivePressure
+    });
+  
   if (effortZeroPrediction > budget.budgetMs) {
     // Still over budget. Shrink dimensions to fit.
     watchdogScaleFactor = Math.sqrt(budget.budgetMs / effortZeroPrediction);
