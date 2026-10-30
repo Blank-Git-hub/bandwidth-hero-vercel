@@ -1031,7 +1031,7 @@ function chooseOutputFormat(metadata, totalPixelCost) {
 // preserves total playback duration. Pure sharp + RIFF surgery.
 // Never rejects: any failure returns null, caller keeps original.
 // ============================================================
-const SPLICE_TARGET_FRAME_MS = safeInt(process.env.SPLICE_TARGET_FRAME_MS, 33);
+const SPLICE_TARGET_FRAME_MS = safeInt(process.env.SPLICE_TARGET_FRAME_MS, 66);
 const SPLICE_MAX_RAW_MB = safeInt(process.env.SPLICE_MAX_RAW_MB, 800);
 
 function computeSpliceStride(delays, frames) {
