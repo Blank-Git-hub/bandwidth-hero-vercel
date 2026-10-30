@@ -1072,7 +1072,6 @@ function patchWebpFrameDurations(buffer, delaysMs) {
   return out;
 }
 
-const SPLICE_TARGET_FRAME_MS = safeInt(process.env.SPLICE_TARGET_FRAME_MS, 33);
 const SPLICE_CHUNK_SIZE = safeInt(process.env.SPLICE_CHUNK_SIZE, 16);
 
 async function spliceAnimatedFrames(buffer, metadata, log, reqId) {
