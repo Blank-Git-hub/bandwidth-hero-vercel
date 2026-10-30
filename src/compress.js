@@ -1127,20 +1127,23 @@ async function spliceAnimatedFrames(buffer, metadata, log, reqId) {
       const end = start + frameBytes;
       if (end > data.length) continue;
       const frameRaw = Buffer.from(data.subarray(start, end));
+      
+      // FAST LOSSY ENCODING for intermediate buffer (saves ~40s CPU time)
       keptFrameBuffers[k] = await sharp(frameRaw, {
         raw: { width: info.width, height: pageHeight, channels }
-      }).webp({ lossless: true, effort: 0 }).toBuffer();
+      }).webp({ lossless: false, quality: 80, effort: 0 }).toBuffer();
     }
   }
 
   if (keptFrameBuffers.some((b) => !b)) return null;
 
+  // FAST LOSSY ENCODING for the joined buffer
   const joinedBuffer = await sharp.join({
     input: keptFrameBuffers,
     width,
     height: pageHeight,
     channels: 4
-  }).webp({ lossless: true, effort: 0 }).toBuffer();
+  }).webp({ lossless: false, quality: 80, effort: 0 }).toBuffer();
 
   const joinedMeta = await sharp(joinedBuffer).metadata();
   if ((joinedMeta.pages || 1) !== keptIndices.length) return null;
