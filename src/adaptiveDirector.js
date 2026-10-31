@@ -87,7 +87,7 @@ normal: 180,
 portrait: 200,
 strip: 320,
 extreme_strip: 480,
-animated: 45
+animated: 300
 },
   jpeg: {
     tiny: 80,
