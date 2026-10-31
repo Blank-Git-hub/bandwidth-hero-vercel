@@ -1695,6 +1695,18 @@ eventLoopLag = await measureEventLoopLag();
         quality = Math.min(63, quality + AVIF_LIMIT_RESIZE_QUALITY_BOOST);
         res.setHeader('X-AVIF-Resize-Quality-Boost', `+${AVIF_LIMIT_RESIZE_QUALITY_BOOST}`);
       }
+
+      // ANIMATION QUALITY FLOOR:
+      // WebP inter-frame prediction catastrophically fails at low quality settings (<40),
+      // producing severe macroblocking (pixilation) and ghosting regardless of effort or tuning.
+      // Enforce a minimum quality of 45 for all animated content.
+      if (isAnimated) {
+        const animFloor = 45;
+        if (quality < animFloor) {
+          res.setHeader('X-Animation-Quality-Floor', `RAISED_TO_${animFloor}`);
+          quality = animFloor;
+        }
+      }
       
       const frameCount = metadata.pages || 1;
       if (isAnimated && totalPixelCost > ANIMATED_MAX_PIXELS) {
