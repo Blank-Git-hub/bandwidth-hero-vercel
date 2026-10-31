@@ -50,7 +50,8 @@ async function generateExactHash(buffer) {
 const MAX_OUTPUT_DIM = safeInt(process.env.MAX_OUTPUT_DIM, 2560);
 const DEFAULT_QUALITY = safeInt(process.env.DEFAULT_QUALITY, 55);
 const MAX_STRIP_WIDTH = safeInt(process.env.MAX_STRIP_WIDTH, 1600);
-const MAX_ANIMATION_FRAMES = safeInt(process.env.MAX_ANIMATION_FRAMES, 2147483647);
+const MAX_ANIMATION_FRAMES = safeInt(process.env.MAX_ANIMATION_FRAMES, 2000);
+const ANIMATED_MAX_PIXELS = safeInt(process.env.ANIMATED_MAX_PIXELS, 300_000_000);
 const VIEWPORT_FALLBACK = safeInt(process.env.VIEWPORT_FALLBACK, 1080);
 const HEALTH_LAG_THRESHOLD = safeInt(process.env.HEALTH_LAG_THRESHOLD, 100);
 const SHUTDOWN_TIMEOUT = safeInt(process.env.SHUTDOWN_TIMEOUT, 10000);
@@ -1397,22 +1398,33 @@ const paramFingerprint = [
     }
   }
 
-    if ((metadata.pages || 1) > 1 && ENABLE_FRAME_DROPPING) {
-    if (signal.aborted) { res.setHeader('X-Timeout-Guillotine', 'ABORTED'); res.status(499); return Buffer.alloc(0); }
-    try {
-      const preSpliceFrames = metadata.pages || 1;
-      const splicedBuffer = await spliceAnimatedFrames(buffer, metadata, log, reqId);
-      if (splicedBuffer && splicedBuffer.length > 0) {
-        buffer = splicedBuffer;
-        metadata = await sharp(buffer).metadata();
-        frames = metadata.pages || 1;
-        totalPixelCost = Math.ceil(width * height * frames * pixelWeight);
-        res.setHeader('X-Frame-Splice', `${preSpliceFrames}->${frames}`);
-      }
-    } catch (spliceErr) {
-      log.warn({ reqId, error: String(spliceErr?.message || spliceErr).split('?')[0] }, '[FRAME-SPLICE-FALLBACK]');
-    }
-    }
+    const isAnimated = (metadata.pages || 1) > 1;
+const frameHeight = metadata.pageHeight || metadata.height;
+const stripHeight = frameHeight * frames;
+const stripPixels = width * stripHeight;
+const requiredStripMB = (stripPixels * 4) / (1024 * 1024);
+const availableMB = memGov.getAvailableMB();
+const canNativeAnimate = isAnimated && (requiredStripMB <= availableMB);
+
+if (isAnimated && !canNativeAnimate && ENABLE_FRAME_DROPPING) {
+if (signal.aborted) { res.setHeader('X-Timeout-Guillotine', 'ABORTED'); res.status(499); return Buffer.alloc(0); }
+try {
+const preSpliceFrames = metadata.pages || 1;
+const splicedBuffer = await spliceAnimatedFrames(buffer, metadata, log, reqId);
+if (splicedBuffer && splicedBuffer.length > 0) {
+buffer = splicedBuffer;
+metadata = await sharp(buffer).metadata();
+frames = metadata.pages || 1;
+totalPixelCost = Math.ceil(width * height * frames * pixelWeight);
+res.setHeader('X-Frame-Splice', `${preSpliceFrames}->${frames}`);
+}
+} catch (spliceErr) {
+log.warn({ reqId, error: String(spliceErr?.message || spliceErr).split('?')[0] }, '[FRAME-SPLICE-FALLBACK]');
+}
+}
+if (canNativeAnimate) {
+res.setHeader('X-Animated-Pipeline', 'NATIVE_FULL');
+}
 
   let thumbResult = null;
     if ((ENABLE_VOID_WATCHER || ENABLE_PALETTE || ENABLE_PLACEHOLDER) && allowEnhancements) {
@@ -1656,9 +1668,16 @@ eventLoopLag = await measureEventLoopLag();
       }
       
       const frameCount = metadata.pages || 1;
-      if (isAnimated && frameCount > MAX_ANIMATION_FRAMES) {
-        res.setHeader('X-Frame-Cap', 'EXCEEDED_ATTEMPTING_ENCODE');
-      }
+      if (isAnimated && totalPixelCost > ANIMATED_MAX_PIXELS) {
+res.setHeader('X-Animated-Pixel-Cap', 'BYPASSED');
+res.setHeader('Content-Type', `image/${format}`);
+return buffer;
+}
+if (isAnimated && frameCount > MAX_ANIMATION_FRAMES) {
+res.setHeader('X-Frame-Cap', 'BYPASSED');
+res.setHeader('Content-Type', `image/${format}`);
+return buffer;
+}
 
       // Banding exorcist check
       let bandingExorcistActive = false;
@@ -1676,12 +1695,16 @@ eventLoopLag = await measureEventLoopLag();
       }
 
       // Build Sharp pipeline
-      const sharpPixelLimit = Math.max(1, totalPixelCost, memGov.getPixelBudget());
-
-let pipeline = sharp(buffer, {
-  animated: isAnimated,
-  limitInputPixels: sharpPixelLimit
+const sharpPixelLimit = Math.max(1, totalPixelCost, memGov.getPixelBudget());
+let pipeline;
+if (canNativeAnimate) {
+pipeline = sharp(buffer, { animated: true, pages: -1, limitInputPixels: stripPixels + 10000 });
+} else {
+pipeline = sharp(buffer, {
+animated: isAnimated,
+limitInputPixels: sharpPixelLimit
 });
+}
 
       // FEATURE: Safe Metadata Exceptions
       if (ENABLE_SAFE_METADATA && ENABLE_METADATA_REAPER) {
@@ -1929,16 +1952,19 @@ if (analysis.isMangaStrip) {
       }
 
    const HARD_MAX_DIM = 16383;
-   if (targetWidth || targetHeight || width > HARD_MAX_DIM || height > HARD_MAX_DIM) {
-     const resizeW = targetWidth || HARD_MAX_DIM;
-     const resizeH = targetHeight || HARD_MAX_DIM;
-     
-     pipeline = pipeline.resize(resizeW, resizeH, {
-       fit: 'inside',
-       withoutEnlargement: true,
-       kernel: sharp.kernel.lanczos3,
-     });
-   }
+if (canNativeAnimate) {
+// Native animated: only resize width to preserve strip aspect ratio
+const resizeW = targetWidth || (targetHeight ? Math.round(width * (targetHeight / height)) : Math.min(width, HARD_MAX_DIM));
+pipeline = pipeline.resize({ width: resizeW, withoutEnlargement: true, kernel: sharp.kernel.lanczos3 });
+} else if (targetWidth || targetHeight || width > HARD_MAX_DIM || height > HARD_MAX_DIM) {
+const resizeW = targetWidth || HARD_MAX_DIM;
+const resizeH = targetHeight || HARD_MAX_DIM;
+pipeline = pipeline.resize(resizeW, resizeH, {
+fit: 'inside',
+withoutEnlargement: true,
+kernel: sharp.kernel.lanczos3,
+});
+}
       // Sharpen - boosted for text images and AVIF limit resizes
       const contentWantsSharpen =
         sharpenPreference !== false &&
@@ -1993,8 +2019,15 @@ if (analysis.isMangaStrip) {
 
       // -----------------------------------
       // --------------------------------------------
-      // ENCODE
-   let outputBuffer;
+      // PRE-FLIGHT TIMEOUT GUILLOTINE
+// sharp's C++ pipeline cannot be interrupted by AbortController once started.
+// If the predicted encode time exceeds the hard timeout, bypass to prevent Vercel hard-kill.
+// Skip for native animated pipeline as it is significantly faster than JS frame splicing.
+if (!canNativeAnimate && adaptive.predictedMs > hardTimeoutMs) {
+res.setHeader('X-Timeout-Guillotine', 'PREDICTED_TIMEOUT');
+res.setHeader('Content-Type', `image/${format}`);
+return buffer;
+}
    let contentType;
    phaseStart = Date.now();
       const encodeStart = Date.now();
