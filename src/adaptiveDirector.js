@@ -82,13 +82,13 @@ const DEFAULT_MS_PER_MP = {
     animated: 1300
   },
   webp: {
-    tiny: 100,
-    normal: 180,
-    portrait: 200,
-    strip: 320,
-    extreme_strip: 480,
-    animated: 300
-  },
+tiny: 100,
+normal: 180,
+portrait: 200,
+strip: 320,
+extreme_strip: 480,
+animated: 45
+},
   jpeg: {
     tiny: 80,
     normal: 120,
