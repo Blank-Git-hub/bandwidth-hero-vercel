@@ -1849,7 +1849,10 @@ if (adaptive.risk === 'budget_exceeded') {
     }
     
     watchdogScaleFactor = Math.max(0.25, Math.min(watchdogScaleFactor, 1));
-    res.setHeader('X-Watchdog', `SHRINK_${Math.round(watchdogScaleFactor * 100)}%`);
+res.setHeader('X-Watchdog', `SHRINK_${Math.round(watchdogScaleFactor * 100)}%`);
+// Downscale compensation: a shrunk canvas carries quality more cheaply.
+quality = Math.min(95, quality + 10);
+res.setHeader('X-Shrink-Quality-Boost', '+10');
   }
 }
 
@@ -2028,6 +2031,7 @@ res.setHeader('X-Timeout-Guillotine', 'PREDICTED_TIMEOUT');
 res.setHeader('Content-Type', `image/${format}`);
 return buffer;
 }
+   let outputBuffer;
    let contentType;
    phaseStart = Date.now();
       const encodeStart = Date.now();
