@@ -326,8 +326,9 @@ export function predictEncodeMs({
 
   const defaultBase = DEFAULT_MS_PER_MP[format]?.[bucket] ?? 1000;
 
-  // Vercel serverless microVMs are slower than bare metal.
-  const SERVERLESS_PENALTY = 3.5;
+  // Vercel Node 24 + libvips microVMs are highly optimized. 
+// The legacy 3.5x penalty causes the Watchdog to falsely panic and crush resolutions.
+const SERVERLESS_PENALTY = 1.5;
   const priorBase = defaultBase * SERVERLESS_PENALTY;
 
   // Blend learned stats gradually to prevent sudden prediction jumps.
