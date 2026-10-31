@@ -1064,7 +1064,7 @@ function patchWebpFrameDurations(buffer, delaysMs) {
   return out;
 }
 
-async function spliceAnimatedFrames(buffer, metadata, log, reqId) {
+async function spliceAnimatedFrames(buffer, metadata, log, reqId, deadlineMs = 0) {
   const frames = metadata.pages || 1;
   if (frames < Math.max(2, FRAME_DROP_THRESHOLD)) return null;
 
@@ -1095,6 +1095,12 @@ async function spliceAnimatedFrames(buffer, metadata, log, reqId) {
   const frameBuffers = new Array(keptIndices.length).fill(null);
 
   for (let chunkStart = 0; chunkStart < frames; chunkStart += CHUNK_SIZE) {
+    // TIME VALVE: if splicing itself is eating the deadline, bail out and let
+    // the native pipeline + watchdog handle the full animation instead.
+    if (deadlineMs > 0 && Date.now() > deadlineMs) {
+      log.warn({ reqId, frames }, '[FRAME-SPLICE-TIME-VALVE] Splice budget exhausted, aborting splice');
+      return null;
+    }
     const chunkSize = Math.min(CHUNK_SIZE, frames - chunkStart);
 
     // Decode only this chunk of frames
@@ -1424,8 +1430,7 @@ if (shouldSplice) {
   if (signal.aborted) { res.setHeader('X-Timeout-Guillotine', 'ABORTED'); res.status(499); return Buffer.alloc(0); }
   try {
     const preSpliceFrames = metadata.pages || 1;
-    const splicedBuffer = await spliceAnimatedFrames(buffer, metadata, log, reqId);
-    if (splicedBuffer && splicedBuffer.length > 0) {
+    const splicedBuffer = await spliceAnimatedFrames(buffer, metadata, log, reqId, startedAt + Math.floor(hardTimeoutMs * 0.4));
       buffer = splicedBuffer;
       metadata = await sharp(buffer).metadata();
       frames = metadata.pages || 1;
@@ -2151,9 +2156,13 @@ return buffer;
                 // 3. Animations need higher quality to prevent macroblocking (pixilation).
                 if (isAnimated) {
                   webpOptions.smartSubsample = false;
-                  webpOptions.effort = Math.max(4, webpOptions.effort);
+                  // Ghosting is controlled by smartSubsample + quality, not brute effort.
+                  // Effort 4 is 2.5x effort 0 (WEBP_EFFORT_FACTOR 0.40 -> 1.00) and blows
+                  // the deadline on high frame counts. Scale the cap by frame count.
+                  const animEffortCap = frames > 100 ? 0 : frames > 50 ? 2 : 4;
+                  webpOptions.effort = Math.min(Math.max(webpOptions.effort, 0), animEffortCap);
                   webpOptions.quality = Math.min(95, webpOptions.quality + 15);
-                  res.setHeader('X-WebP-Animation-Tuning', 'ANTI_GHOST');
+                  res.setHeader('X-WebP-Animation-Tuning', `ANTI_GHOST_CAP_${animEffortCap}`);
                 }
 
                 outputBuffer = await pipeline.webp(webpOptions).toBuffer();
