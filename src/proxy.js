@@ -307,10 +307,19 @@ function redactUrlForCache(urlStr) {
 }
 
 function sanitizeError(err) {
-  let msg = err?.message ? String(err.message) : 'Unknown error';
-  msg = msg.replace(/\?[^\s]*/g, '');
-  msg = msg.replace(/(api[_-]?key|apikey|api|key|token|secret|password)=([^\s&]*)/gi, '$1=[REDACTED]');
-  return msg;
+let msg = err?.message ? String(err.message) : 'Unknown error';
+msg = msg.replace(/\?[^\s]*/g, '');
+msg = msg.replace(/(api[_-]?key|apikey|api|key|token|secret|password)=([^\s&]*)/gi, '$1=[REDACTED]');
+return msg;
+}
+// OBSERVABILITY: safe, redacted, single-line preview of upstream failure bodies.
+function bodyPreview(buffer, maxBytes = 64) {
+if (!Buffer.isBuffer(buffer) || buffer.length === 0) return '';
+const slice = buffer.subarray(0, Math.min(maxBytes, buffer.length));
+let text = slice.toString('utf8');
+text = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '\uFFFD');
+text = text.replace(/(api[_-]?key|apikey|api|key|token|secret|password|keystamp)=([^\s&;]*)/gi, '$1=[REDACTED]');
+return text;
 }
 
 function isClientAborted(req) {
@@ -770,15 +779,38 @@ try {
     const upstreamMaxAgeMatch = upstreamCacheControl.match(/max-age=(\d+)/i);
     const upstreamMaxAge = upstreamMaxAgeMatch ? parseInt(upstreamMaxAgeMatch[1], 10) : null;
 
-    if (statusCode === 404) return sendGhost(res, 86400, { body: rawBody, accept: req.headers.accept }, 'upstream_404');
+    if (statusCode === 404 || statusCode === 410 || statusCode === 403 || (statusCode !== 304 && (statusCode < 200 || statusCode >= 300))) {
+log.warn({
+event: 'GHOST',
+reqId,
+reason: statusCode === 404 ? 'upstream_404' : statusCode === 410 ? 'upstream_410_gone' : statusCode === 403 ? 'upstream_403' : `upstream_error_${statusCode}`,
+upstreamStatus: statusCode,
+bytes: rawBody.length,
+bodyPreview: bodyPreview(rawBody, 64),
+url: sanitizeUrl(targetUrl)
+}, '[GHOST] Upstream error status');
+}
+if (statusCode === 404) return sendGhost(res, 86400, { body: rawBody, accept: req.headers.accept }, 'upstream_404');
 if (statusCode === 410) return sendGhost(res, 86400, { body: rawBody, accept: req.headers.accept }, 'upstream_410_gone');
 if (statusCode === 403) return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'upstream_403');
 if (statusCode !== 304 && (statusCode < 200 || statusCode >= 300)) {
-  log.warn({ reqId, statusCode, url: sanitizeUrl(targetUrl) }, '[UPSTREAM ERROR] Non-2xx response');
-  return sendGhost(res, 60, { body: rawBody, accept: req.headers.accept }, `upstream_error_${statusCode}`);
+return sendGhost(res, 60, { body: rawBody, accept: req.headers.accept }, `upstream_error_${statusCode}`);
 }
+  
     const detectedType = detectContentType(rawBody);
-if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'not_an_image');
+if (!detectedType.startsWith('image/')) {
+log.warn({
+event: 'GHOST',
+reqId,
+reason: 'not_an_image',
+upstreamStatus: statusCode,
+upstreamType: detectedType,
+bytes: rawBody.length,
+bodyPreview: bodyPreview(rawBody, 64),
+url: sanitizeUrl(targetUrl)
+}, '[GHOST] Upstream returned non-image body');
+return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'not_an_image');
+}
     
     if (req.query?.debug === '1') {
       try {
@@ -940,9 +972,14 @@ if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawB
         }
 
         if (!retrySuccess && !compressedResult) {
-          log.error({ reqId }, '[CORRUPT RETRY] All retry attempts exhausted');
-          return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'corrupt_image');
-        }
+log.error({
+reqId,
+bytes: rawBody.length,
+bodyPreview: bodyPreview(rawBody, 64),
+url: sanitizeUrl(targetUrl)
+}, '[CORRUPT RETRY] All retry attempts exhausted');
+return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'corrupt_image');
+}
       } else if (compressError) {
         throw compressError;
       }
