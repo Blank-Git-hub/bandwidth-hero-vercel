@@ -190,7 +190,8 @@ export default async function authenticate(req, res, next) {
   // 0. Check Internal Service Key (from Cloudflare Worker - F10 FIX)
   const serviceKey = req.headers['x-vercel-service-key'];
   if (VERCEL_SERVICE_KEY && serviceKey && safeCompare(serviceKey, VERCEL_SERVICE_KEY)) {
-    const serviceIdentity = credentialIdentity('svc', VERCEL_SERVICE_KEY);
+req.authVia = 'service';
+const serviceIdentity = credentialIdentity('svc', VERCEL_SERVICE_KEY);
 
     if (!(await allowKeyRequest(serviceIdentity, SERVICE_KEY_RATE_LIMIT_MAX))) {
       res.setHeader('Retry-After', String(Math.ceil(KEY_RATE_LIMIT_WINDOW_MS / 1000)));
