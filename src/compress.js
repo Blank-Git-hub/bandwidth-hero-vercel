@@ -1884,19 +1884,23 @@ if (adaptive.risk === 'budget_exceeded') {
   
   if (effortZeroPrediction > budget.budgetMs) {
     // Still over budget. Shrink dimensions to fit.
+    // No extra animated penalty — the sqrt formula already targets the time budget.
     watchdogScaleFactor = Math.sqrt(budget.budgetMs / effortZeroPrediction);
     
-    // ANIMATED PENALTY: Force extra shrink for animations to guarantee <60s encode
-    if (isAnimated) {
-      watchdogScaleFactor *= 0.7; // 30% additional shrink
-    }
-    
-    watchdogScaleFactor = Math.max(0.25, Math.min(watchdogScaleFactor, 1));
+    watchdogScaleFactor = Math.max(0.4, Math.min(watchdogScaleFactor, 1));
 res.setHeader('X-Watchdog', `SHRINK_${Math.round(watchdogScaleFactor * 100)}%`);
 // Downscale compensation: a shrunk canvas carries quality more cheaply.
 quality = Math.min(95, quality + 10);
 res.setHeader('X-Shrink-Quality-Boost', '+10');
   }
+}
+
+// RISK RECONCILIATION: If the watchdog successfully shrunk the image to fit the budget,
+// the final risk is 'shrunk_to_fit', not the original 'budget_exceeded'.
+let finalRisk = adaptive.risk;
+if (watchdogScaleFactor < 1 && adaptive.risk === 'budget_exceeded') {
+  finalRisk = 'shrunk_to_fit';
+  res.setHeader('X-Adaptive-Risk', 'shrunk_to_fit');
 }
 
       // Resize
@@ -2500,7 +2504,7 @@ timedOut: signal.aborted
          errorPercent: calibrationPredictedMs > 0
            ? Math.round(((encodeTime - calibrationPredictedMs) / calibrationPredictedMs) * 100)
            : 0,
-         risk: adaptive.risk,
+         risk: typeof finalRisk !== 'undefined' ? finalRisk : adaptive.risk,
          pressure: adaptivePressure,
          eventLoopLagMs: eventLoopLag,
          activeEncodes,
