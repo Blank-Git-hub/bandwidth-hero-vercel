@@ -1429,7 +1429,7 @@ if (isAnimated && ENABLE_FRAME_DROPPING) {
 if (shouldSplice) {
 try {
     const preSpliceFrames = metadata.pages || 1;
-    const splicedBuffer = await spliceAnimatedFrames(buffer, metadata, log, reqId, startedAt + Math.floor(hardTimeoutMs * 0.4));
+    const splicedBuffer = await spliceAnimatedFrames(buffer, metadata, log, reqId, startedAt + Math.floor(hardTimeoutMs * 0.25));
     if (splicedBuffer && splicedBuffer.length > 0) {
       buffer = splicedBuffer;
       metadata = await sharp(buffer).metadata();
@@ -2061,7 +2061,7 @@ kernel: sharp.kernel.lanczos3,
 // sharp's C++ pipeline cannot be interrupted by AbortController once started.
 // If the predicted encode time exceeds the hard timeout, bypass to prevent Vercel hard-kill.
 // Skip for native animated pipeline as it is significantly faster than JS frame splicing.
-if (!canNativeAnimate && adaptive.predictedMs > hardTimeoutMs) {
+if (!canNativeAnimate && watchdogScaleFactor === 1 && adaptive.predictedMs > hardTimeoutMs) {
   res.setHeader('X-Timeout-Guillotine', 'PREDICTED_TIMEOUT_REJECTED');
   res.status(502);
   return Buffer.alloc(0);
