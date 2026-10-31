@@ -2342,8 +2342,8 @@ timedOut: signal.aborted
       // Encoding verifier
       if (ENABLE_ENCODING_VERIFIER) {
         if (!verifyOutput(outputBuffer, outputFormat)) {
-          res.setHeader('X-Encoding-Verifier', 'FAILED');
-          res.status(404);
+res.setHeader('X-Encoding-Verifier', 'FAILED');
+res.status(502);
           if (ENABLE_ORACLE_LEDGER) metrics.encodingFailures++;
           return Buffer.alloc(0);
         }
