@@ -217,8 +217,9 @@ export default async function authenticate(req, res, next) {
     }
 
     await clearAuthFailure(clientKey);
-    return next();
-  }
+await recordSuccessfulRequest(clientKey);
+return next();
+}
 
   // 2. Check Query String API Key (F5-MODIFIED: legacy support)
   if (ALLOW_QUERY_API_KEY) {
@@ -238,8 +239,9 @@ export default async function authenticate(req, res, next) {
       }
 
       await clearAuthFailure(clientKey);
-      return next();
-    }
+await recordSuccessfulRequest(clientKey);
+return next();
+}
   }
 
   // 3. Check Basic Auth
@@ -260,8 +262,9 @@ export default async function authenticate(req, res, next) {
       }
 
       await clearAuthFailure(clientKey);
-      return next();
-    }
+await recordSuccessfulRequest(clientKey);
+return next();
+}
   }
 
   // 4. Deny access
