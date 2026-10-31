@@ -1427,10 +1427,10 @@ if (isAnimated && ENABLE_FRAME_DROPPING) {
     : `SKIP_PREDICTED_${Math.round(fullEncodePrediction)}ms`);
 }
 if (shouldSplice) {
-  if (signal.aborted) { res.setHeader('X-Timeout-Guillotine', 'ABORTED'); res.status(499); return Buffer.alloc(0); }
-  try {
+try {
     const preSpliceFrames = metadata.pages || 1;
     const splicedBuffer = await spliceAnimatedFrames(buffer, metadata, log, reqId, startedAt + Math.floor(hardTimeoutMs * 0.4));
+    if (splicedBuffer && splicedBuffer.length > 0) {
       buffer = splicedBuffer;
       metadata = await sharp(buffer).metadata();
       frames = metadata.pages || 1;
