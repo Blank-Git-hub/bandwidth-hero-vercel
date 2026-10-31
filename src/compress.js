@@ -1398,32 +1398,37 @@ const paramFingerprint = [
     }
   }
 
-    const isAnimated = (metadata.pages || 1) > 1;
-const frameHeight = metadata.pageHeight || metadata.height;
-const stripHeight = frameHeight * frames;
-const stripPixels = width * stripHeight;
-const requiredStripMB = (stripPixels * 4) / (1024 * 1024);
-const availableMB = memGov.getAvailableMB();
-const canNativeAnimate = isAnimated && (requiredStripMB <= availableMB);
+    // STEP 1: Frame Splicing (Always attempt if enabled to hit 15fps target)
+// We do this BEFORE the RAM check so that dropping frames reduces the pixel cost,
+// which prevents the watchdog from unnecessarily shrinking the image dimensions later.
+if (isAnimated && ENABLE_FRAME_DROPPING) {
+  if (signal.aborted) { res.setHeader('X-Timeout-Guillotine', 'ABORTED'); res.status(499); return Buffer.alloc(0); }
+  try {
+    const preSpliceFrames = metadata.pages || 1;
+    const splicedBuffer = await spliceAnimatedFrames(buffer, metadata, log, reqId);
+    if (splicedBuffer && splicedBuffer.length > 0) {
+      buffer = splicedBuffer;
+      metadata = await sharp(buffer).metadata();
+      frames = metadata.pages || 1;
+      totalPixelCost = Math.ceil(width * height * frames * pixelWeight);
+      res.setHeader('X-Frame-Splice', `${preSpliceFrames}->${frames}`);
+    }
+  } catch (spliceErr) {
+    log.warn({ reqId, error: String(spliceErr?.message || spliceErr).split('?')[0] }, '[FRAME-SPLICE-FALLBACK]');
+  }
+}
 
-if (isAnimated && !canNativeAnimate && ENABLE_FRAME_DROPPING) {
-if (signal.aborted) { res.setHeader('X-Timeout-Guillotine', 'ABORTED'); res.status(499); return Buffer.alloc(0); }
-try {
-const preSpliceFrames = metadata.pages || 1;
-const splicedBuffer = await spliceAnimatedFrames(buffer, metadata, log, reqId);
-if (splicedBuffer && splicedBuffer.length > 0) {
-buffer = splicedBuffer;
-metadata = await sharp(buffer).metadata();
-frames = metadata.pages || 1;
-totalPixelCost = Math.ceil(width * height * frames * pixelWeight);
-res.setHeader('X-Frame-Splice', `${preSpliceFrames}->${frames}`);
-}
-} catch (spliceErr) {
-log.warn({ reqId, error: String(spliceErr?.message || spliceErr).split('?')[0] }, '[FRAME-SPLICE-FALLBACK]');
-}
-}
+// STEP 2: Recalculate RAM for Native Pipeline based on (potentially spliced) frame count
+const isAnimatedPostSplice = (metadata.pages || 1) > 1;
+const frameHeightPostSplice = metadata.pageHeight || metadata.height;
+const stripHeightPostSplice = frameHeightPostSplice * frames;
+const stripPixelsPostSplice = width * stripHeightPostSplice;
+const requiredStripMBPostSplice = (stripPixelsPostSplice * 4) / (1024 * 1024);
+const availableMB = memGov.getAvailableMB();
+const canNativeAnimate = isAnimatedPostSplice && (requiredStripMBPostSplice <= availableMB);
+
 if (canNativeAnimate) {
-res.setHeader('X-Animated-Pipeline', 'NATIVE_FULL');
+  res.setHeader('X-Animated-Pipeline', 'NATIVE_FULL');
 }
 
   let thumbResult = null;
