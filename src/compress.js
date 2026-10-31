@@ -1421,7 +1421,8 @@ if (isAnimated && ENABLE_FRAME_DROPPING) {
     effort: 0,
     pressure: 1
   });
-  shouldSplice = fullEncodePrediction > (hardTimeoutMs * 0.5);
+  // Force splice if frames > 120 to prevent massive spatial shrinking.
+  shouldSplice = fullEncodePrediction > (hardTimeoutMs * 0.5) || frames > 120;
   res.setHeader('X-Splice-Gate', shouldSplice
     ? `SPLICE_PREDICTED_${Math.round(fullEncodePrediction)}ms`
     : `SKIP_PREDICTED_${Math.round(fullEncodePrediction)}ms`);
