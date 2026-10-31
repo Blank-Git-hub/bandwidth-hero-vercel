@@ -1030,7 +1030,7 @@ function chooseOutputFormat(metadata, totalPixelCost) {
 // FEATURE: Animated Frame Splicing (60fps -> <=15fps)
 // Uses sharp's native array join syntax: sharp([buf1, buf2], { join: { animated: true } })
 // ============================================================
-const SPLICE_TARGET_FRAME_MS = safeInt(process.env.SPLICE_TARGET_FRAME_MS, 66);
+const SPLICE_TARGET_FRAME_MS = safeInt(process.env.SPLICE_TARGET_FRAME_MS, 41);
 const SPLICE_MAX_RAW_MB = safeInt(process.env.SPLICE_MAX_RAW_MB, 800);
 
 function computeSpliceStride(delays, frames) {
@@ -1398,11 +1398,29 @@ const paramFingerprint = [
     }
   }
 
-    // STEP 1: Frame Splicing (Always attempt if enabled to hit 15fps target)
-// We do this BEFORE the RAM check so that dropping frames reduces the pixel cost,
-// which prevents the watchdog from unnecessarily shrinking the image dimensions later.
+    // STEP 1: Frame Splicing (TIME-BUDGET GATED)
+// JS splicing is expensive (per-frame decode + re-encode). Only run it when the
+// native encode of ALL frames would exceed the time budget. Small/medium animations
+// encode natively in seconds and must NOT be slowed down by the splicer.
 const isAnimated = (metadata.pages || 1) > 1;
+let shouldSplice = false;
 if (isAnimated && ENABLE_FRAME_DROPPING) {
+  const fullEncodePrediction = adaptiveDirector.predictEncodeMs({
+    format: outputFormat,
+    width,
+    height,
+    frames,
+    pixelCost: totalPixelCost,
+    inputFormat: req.opts?.originType || 'image/webp',
+    effort: 0,
+    pressure: 1
+  });
+  shouldSplice = fullEncodePrediction > (hardTimeoutMs * 0.5);
+  res.setHeader('X-Splice-Gate', shouldSplice
+    ? `SPLICE_PREDICTED_${Math.round(fullEncodePrediction)}ms`
+    : `SKIP_PREDICTED_${Math.round(fullEncodePrediction)}ms`);
+}
+if (shouldSplice) {
   if (signal.aborted) { res.setHeader('X-Timeout-Guillotine', 'ABORTED'); res.status(499); return Buffer.alloc(0); }
   try {
     const preSpliceFrames = metadata.pages || 1;
