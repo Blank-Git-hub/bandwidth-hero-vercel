@@ -85,7 +85,7 @@ const ENABLE_ALPHA_TRIM = envBool('ENABLE_ALPHA_TRIM', true);
 const ALPHA_TRIM_MAX_PIXELS = safeInt(process.env.ALPHA_TRIM_MAX_PIXELS, 8_000_000);
 
 // FEATURE: Animated Frame Dropping
-const ENABLE_FRAME_DROPPING = envBool('ENABLE_FRAME_DROPPING', true);
+const ENABLE_FRAME_DROPPING = envBool('ENABLE_FRAME_DROPPING', false);
 const FRAME_DROP_THRESHOLD = safeInt(process.env.FRAME_DROP_THRESHOLD, 50);
 
 // FEATURE: Safe Metadata Exceptions
