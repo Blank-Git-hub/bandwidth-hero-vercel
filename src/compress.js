@@ -1698,15 +1698,15 @@ eventLoopLag = await measureEventLoopLag();
       
       const frameCount = metadata.pages || 1;
       if (isAnimated && totalPixelCost > ANIMATED_MAX_PIXELS) {
-res.setHeader('X-Animated-Pixel-Cap', 'BYPASSED');
-res.setHeader('Content-Type', `image/${format}`);
-return buffer;
-}
-if (isAnimated && frameCount > MAX_ANIMATION_FRAMES) {
-res.setHeader('X-Frame-Cap', 'BYPASSED');
-res.setHeader('Content-Type', `image/${format}`);
-return buffer;
-}
+        res.setHeader('X-Animated-Pixel-Cap', 'REJECTED');
+        res.status(502);
+        return Buffer.alloc(0);
+      }
+      if (isAnimated && frameCount > MAX_ANIMATION_FRAMES) {
+        res.setHeader('X-Frame-Cap', 'REJECTED');
+        res.status(502);
+        return Buffer.alloc(0);
+      }
 
       // Banding exorcist check
       let bandingExorcistActive = false;
@@ -2062,9 +2062,9 @@ kernel: sharp.kernel.lanczos3,
 // If the predicted encode time exceeds the hard timeout, bypass to prevent Vercel hard-kill.
 // Skip for native animated pipeline as it is significantly faster than JS frame splicing.
 if (!canNativeAnimate && adaptive.predictedMs > hardTimeoutMs) {
-res.setHeader('X-Timeout-Guillotine', 'PREDICTED_TIMEOUT');
-res.setHeader('Content-Type', `image/${format}`);
-return buffer;
+  res.setHeader('X-Timeout-Guillotine', 'PREDICTED_TIMEOUT_REJECTED');
+  res.status(502);
+  return Buffer.alloc(0);
 }
    let outputBuffer;
    let contentType;
@@ -2534,10 +2534,7 @@ return buffer;
     }
 
     if (!res.headersSent && !res.writableEnded) {
-      const fallbackType = req.opts?.originType || 'image/jpeg';
-      const safeType = fallbackType.startsWith('image/') ? fallbackType : `image/${fallbackType}`;
-      res.setHeader('Content-Type', safeType);
-      res.end(buffer);
+      res.status(502).json({ error: 'Compression failed, uncompressed fallback disabled' });
     } else {
       req.socket?.destroy();
     }
