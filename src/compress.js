@@ -1790,14 +1790,16 @@ limitInputPixels: sharpPixelLimit
       }
 
       // Moire removal
-      if (allowEnhancements && halftoneResult && halftoneResult.isHalftone && halftoneResult.confidence > 0.85) {
+      // ANIMATION SAFETY: median() per-frame causes temporal flickering and ghosting.
+      if (allowEnhancements && !isAnimated && halftoneResult && halftoneResult.isHalftone && halftoneResult.confidence > 0.85) {
         pipeline = pipeline.median(3);
         res.setHeader('X-Moire-Removed', 'true');
         recordMetric('moireRemoval');
       }
 
       // Line denoise
-      if (allowLineArtFilters && lineArtResult && lineArtResult.isLineArt && lineArtResult.confidence > 0.85) {
+      // ANIMATION SAFETY: median() and sharpen() applied per-frame cause severe temporal flickering.
+      if (allowLineArtFilters && !isAnimated && lineArtResult && lineArtResult.isLineArt && lineArtResult.confidence > 0.85) {
         pipeline = pipeline.median(3);
         if (sharpenPreference !== false) {
           pipeline = pipeline.sharpen({ sigma: 0.6, flat: 3.0, jagged: 1.5 });
@@ -1969,8 +1971,12 @@ kernel: sharp.kernel.lanczos3,
 });
 }
       // Sharpen - boosted for text images and AVIF limit resizes
+      // ANIMATION ANTI-PIXILATION:
+      // Sharpening before lossy compression injects high-frequency noise that the encoder
+      // wastes bitrate trying to compress, causing severe macroblocking (pixilation).
       const contentWantsSharpen =
         sharpenPreference !== false &&
+        !isAnimated &&
         (
           isTextHeavy ||
           ((analysis.sharpness < 50 || analysis.isMangaWidePage) && !analysis.isMangaStrip) ||
@@ -2107,13 +2113,26 @@ return buffer;
                 contentType = 'image/avif';
                 break;
               case 'webp':
-                outputBuffer = await pipeline.webp({
+                const webpOptions = {
                   quality,
                   effort: Math.min(Math.max(safeEncodeEffort, 0), 6),
                   smartSubsample: true,
                   preset: getWebpPreset(analysis, lineArtResult, origW, origH),
                   minSize: parseTriState(req.query?.minsize, false),
-                }).toBuffer();
+                };
+                
+                // ANIMATION ANTI-GHOSTING & ANTI-PIXILATION:
+                // 1. smartSubsample blurs edges, which the motion estimator smears (ghosting).
+                // 2. Low effort = poor motion vectors (ghosting). Force min 4 for animations.
+                // 3. Animations need higher quality to prevent macroblocking (pixilation).
+                if (isAnimated) {
+                  webpOptions.smartSubsample = false;
+                  webpOptions.effort = Math.max(4, webpOptions.effort);
+                  webpOptions.quality = Math.min(95, webpOptions.quality + 15);
+                  res.setHeader('X-WebP-Animation-Tuning', 'ANTI_GHOST');
+                }
+
+                outputBuffer = await pipeline.webp(webpOptions).toBuffer();
                 contentType = 'image/webp';
                 break;
               case 'jpeg':
