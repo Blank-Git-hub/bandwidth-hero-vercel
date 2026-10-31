@@ -36,10 +36,15 @@ app.use(helmet({
 
 // F20: Request ID middleware
 app.use((req, res, next) => {
-  const reqId = req.headers['x-request-id'] || crypto.randomUUID();
-  req.id = reqId;
-  res.setHeader('X-Request-ID', reqId);
-  next();
+const reqId = req.headers['x-request-id'] || crypto.randomUUID();
+req.id = reqId;
+res.setHeader('X-Request-ID', reqId);
+const ac = new AbortController();
+req.signal = ac.signal;
+res.on('close', () => {
+if (!res.writableEnded) ac.abort(new Error('CLIENT_DISCONNECT'));
+});
+next();
 });
 
 const logger = pino({
