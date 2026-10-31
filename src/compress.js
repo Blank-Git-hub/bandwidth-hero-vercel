@@ -2276,31 +2276,42 @@ if (!canNativeAnimate && watchdogScaleFactor === 1 && adaptive.predictedMs > har
    }
 
    const finalRecordedEffort = typeof safeEncodeEffort !== 'undefined' ? safeEncodeEffort : effort;
-
-   const calibrationPredictedMs = adaptiveDirector.predictEncodeMs({
-     format: outputFormat,
-     width: origW,
-     height: origH,
-     frames,
-     pixelCost: totalPixelCost,
-     inputFormat: req.opts?.originType || 'image/jpeg',
-     effort: finalRecordedEffort,
-     pressure: adaptivePressure
-   });
-
-   adaptiveDirector.recordEncode({
-     format: outputFormat,
-     width: origW,
-     height: origH,
-     frames,
-     pixelCost: totalPixelCost,
-     effort: finalRecordedEffort,
-     encodeMs: encodeTime,
-     predictedMs: calibrationPredictedMs,
-     pressure: adaptivePressure,
-     success: !clientDisconnected && !signal.aborted,
-     timedOut: signal.aborted
-   });
+// CALIBRATION INTEGRITY: learn from the pixels we ACTUALLY encoded,
+// not the original pixel cost. Recording shrunk encodes against the
+// original pixels poisons msPerMp stats and corrupts every prediction.
+let recordedW = targetWidth || origW;
+let recordedH = targetHeight || origH;
+// Single-dimension resizes scale the other axis proportionally (fit: 'inside').
+// Record the real output geometry, not the resize box.
+if (targetWidth && !targetHeight) {
+  recordedH = Math.max(1, Math.round(origH * (targetWidth / origW)));
+} else if (targetHeight && !targetWidth) {
+  recordedW = Math.max(1, Math.round(origW * (targetHeight / origH)));
+}
+const recordedPixelCost = Math.ceil(recordedW * recordedH * frames * pixelWeight);
+const calibrationPredictedMs = adaptiveDirector.predictEncodeMs({
+format: outputFormat,
+width: recordedW,
+height: recordedH,
+frames,
+pixelCost: recordedPixelCost,
+inputFormat: req.opts?.originType || 'image/jpeg',
+effort: finalRecordedEffort,
+pressure: adaptivePressure
+});
+adaptiveDirector.recordEncode({
+format: outputFormat,
+width: recordedW,
+height: recordedH,
+frames,
+pixelCost: recordedPixelCost,
+effort: finalRecordedEffort,
+encodeMs: encodeTime,
+predictedMs: calibrationPredictedMs,
+pressure: adaptivePressure,
+success: !clientDisconnected && !signal.aborted,
+timedOut: signal.aborted
+});
 
       res.setHeader('X-Processing-Time', `${encodeTime}ms`);
       res.setHeader('X-Adaptive-Actual', `${encodeTime}ms`);
