@@ -1401,6 +1401,7 @@ const paramFingerprint = [
     // STEP 1: Frame Splicing (Always attempt if enabled to hit 15fps target)
 // We do this BEFORE the RAM check so that dropping frames reduces the pixel cost,
 // which prevents the watchdog from unnecessarily shrinking the image dimensions later.
+const isAnimated = (metadata.pages || 1) > 1;
 if (isAnimated && ENABLE_FRAME_DROPPING) {
   if (signal.aborted) { res.setHeader('X-Timeout-Guillotine', 'ABORTED'); res.status(499); return Buffer.alloc(0); }
   try {
@@ -1703,7 +1704,7 @@ return buffer;
 const sharpPixelLimit = Math.max(1, totalPixelCost, memGov.getPixelBudget());
 let pipeline;
 if (canNativeAnimate) {
-pipeline = sharp(buffer, { animated: true, pages: -1, limitInputPixels: stripPixels + 10000 });
+pipeline = sharp(buffer, { animated: true, pages: -1, limitInputPixels: stripPixelsPostSplice + 10000 });
 } else {
 pipeline = sharp(buffer, {
 animated: isAnimated,
