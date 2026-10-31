@@ -290,7 +290,7 @@ function updateCalibration(format, predictedMs, actualMs, pressure) {
   // Do not learn from pressured requests.
   if (Number.isFinite(pressure) && pressure > 1.15) return;
 
-  const correction = Math.min(2, Math.max(0.5, actualMs / predictedMs));
+  const correction = Math.min(4, Math.max(0.25, actualMs / predictedMs));
   const cal = calibration.get(format) || { factor: 1, samples: 0 };
 
   // Learn fast at first, then dampen to prevent oscillation.
