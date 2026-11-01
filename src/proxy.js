@@ -950,13 +950,23 @@ return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'not_
             }
 
             const retryBudget = memoryGovernor.getDownloadBudget();
-            if (decompressedRetry.length > retryBudget) continue;
+if (decompressedRetry.length > retryBudget) continue;
+const retryType = detectContentType(decompressedRetry);
+if (!retryType.startsWith('image/')) continue;
 
-            const retryType = detectContentType(decompressedRetry);
-            if (!retryType.startsWith('image/')) continue;
+// C-014: Fix memory accounting for retry body
+if (reservedBodyBytes > 0) {
+  memoryGovernor.releaseBytes(reservedBodyBytes);
+  reservedBodyBytes = 0;
+}
+if (!memoryGovernor.admitBytes(decompressedRetry.length)) {
+  continue;
+}
+reservedBodyBytes = decompressedRetry.length;
+rawBody = decompressedRetry;
 
-            // Retry compress with fresh body
-            compressedResult = await compress(req, res, decompressedRetry, memoryGovernor);
+// Retry compress with fresh body
+compressedResult = await compress(req, res, decompressedRetry, memoryGovernor);
             retrySuccess = true;
             res.setHeader('X-Corrupt-Retry', `SUCCESS_ATTEMPT_${attempt}`);
             rawBody = decompressedRetry;
