@@ -36,7 +36,10 @@ app.use(helmet({
 
 // F20: Request ID middleware
 app.use((req, res, next) => {
-const reqId = req.headers['x-request-id'] || crypto.randomUUID();
+const rawReqId = req.headers['x-request-id'];
+const reqId = typeof rawReqId === 'string' && /^[A-Za-z0-9._:-]{1,64}$/.test(rawReqId)
+  ? rawReqId
+  : crypto.randomUUID();
 req.id = reqId;
 res.setHeader('X-Request-ID', reqId);
 const ac = new AbortController();
@@ -160,6 +163,14 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Headers', 'x-api-key, content-type, authorization');
     res.setHeader('Access-Control-Max-Age', '86400');
     return res.status(204).end();
+  }
+  next();
+});
+
+app.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
+    res.setHeader('Allow', 'GET, HEAD, OPTIONS');
+    return res.status(405).json({ error: 'Method Not Allowed' });
   }
   next();
 });
