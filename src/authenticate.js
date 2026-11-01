@@ -10,7 +10,7 @@ const { LOGIN, PASSWORD, API_KEY, VERCEL_SERVICE_KEY } = process.env;
 
 // F5-MODIFIED: Legacy query auth toggle
 const ALLOW_QUERY_API_KEY = ['1', 'true', 'yes', 'on'].includes(
-  String(process.env.ALLOW_QUERY_API_KEY || 'true').trim().toLowerCase()
+  String(process.env.ALLOW_QUERY_API_KEY || 'false').trim().toLowerCase()
 );
 
 if (ALLOW_QUERY_API_KEY && API_KEY) {
