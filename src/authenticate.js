@@ -42,9 +42,9 @@ const KEY_RATE_LIMIT_MAX =
 
 const parsedServiceKeyMax = parseInt(process.env.SERVICE_KEY_RATE_LIMIT_MAX, 10);
 const SERVICE_KEY_RATE_LIMIT_MAX =
-  Number.isFinite(parsedServiceKeyMax) && parsedServiceKeyMax >= 0
-    ? parsedServiceKeyMax
-    : 0;
+Number.isFinite(parsedServiceKeyMax) && parsedServiceKeyMax > 0
+? parsedServiceKeyMax
+: REQ_RATE_LIMIT_MAX * 100;
 
 function credentialIdentity(label, secret) {
   if (!secret || typeof secret !== 'string') return null;
