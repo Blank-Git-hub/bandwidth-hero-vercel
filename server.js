@@ -24,8 +24,16 @@ const brotliCompressAsync = promisify(brotliCompress);
 
 const app = express();
 
+function parseTrustProxy(value) {
+  if (value === undefined) return 1;
+  if (value === 'false') return false;
+  if (value === 'true') return true;
+  const n = parseInt(value, 10);
+  return Number.isFinite(n) ? n : value;
+}
+
 app.disable('x-powered-by');
-app.set('trust proxy', 1);
+app.set('trust proxy', parseTrustProxy(process.env.TRUST_PROXY));
 
 app.use(helmet({
   contentSecurityPolicy: false,
