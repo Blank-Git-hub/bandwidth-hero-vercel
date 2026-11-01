@@ -974,9 +974,18 @@ function getAvifLimitScale(width, height, totalPixelCost) {
   return scale;
 }
 
-function chooseOutputFormat(metadata, totalPixelCost) {
-  const isAnimated = (metadata.pages || 1) > 1;
-  const format = metadata.format;
+function chooseOutputFormat(metadata, totalPixelCost, requestedFormat = null) {
+if (requestedFormat === 'jpeg') {
+return { format: 'jpeg', reason: 'requested_jpeg' };
+}
+if (requestedFormat === 'webp') {
+return { format: 'webp', reason: 'requested_webp' };
+}
+if (requestedFormat === 'avif' && (metadata.pages || 1) <= 1) {
+return { format: 'avif', reason: 'requested_avif' };
+}
+const isAnimated = (metadata.pages || 1) > 1;
+const format = metadata.format;
 
   if (format === 'gif' || isAnimated) {
     return { format: 'webp', reason: 'animated_or_gif' };
@@ -1294,7 +1303,7 @@ const pixelWeight = Math.max(1, bytesPerPixel / 6);
 
 totalPixelCost = Math.ceil(width * height * frames * pixelWeight);
 
-    const formatDecision = chooseOutputFormat(metadata, totalPixelCost);
+    const formatDecision = chooseOutputFormat(metadata, totalPixelCost, req.opts?.format);
     const outputFormat = formatDecision.format;
 
     const avifLimitScale = outputFormat === 'avif'
@@ -1374,10 +1383,12 @@ totalPixelCost = Math.ceil(width * height * frames * pixelWeight);
   ? 'md-fixed'
   : `vp-${getViewportMaxDim(req)}`;
 
+const minSizePreference = parseTriState(req.query?.minsize, false);
 const paramFingerprint = [
   outputFormat, req.opts?.quality, req.opts?.grayscale,
   req.opts?.maxDim, req.opts?.maxStripWidth, mode,
   sharpenPreference === undefined ? '' : String(sharpenPreference),
+  String(minSizePreference),
   req.opts?.rotate || 0,
   viewportCacheKey
 ].join('|');
