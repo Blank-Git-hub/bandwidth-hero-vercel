@@ -51,7 +51,15 @@ const reqId = typeof rawReqId === 'string' && /^[A-Za-z0-9._:-]{1,64}$/.test(raw
 req.id = reqId;
 res.setHeader('X-Request-ID', reqId);
 const ac = new AbortController();
-req.signal = ac.signal;
+try {
+  Object.defineProperty(req, 'signal', {
+    value: ac.signal,
+    writable: true,
+    configurable: true
+  });
+} catch {
+  req.abortSignal = ac.signal;
+}
 res.on('close', () => {
 if (!res.writableEnded) ac.abort(new Error('CLIENT_DISCONNECT'));
 });
