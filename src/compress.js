@@ -1713,7 +1713,7 @@ eventLoopLag = await measureEventLoopLag();
       // producing severe macroblocking (pixilation) and ghosting regardless of effort or tuning.
       // Enforce a minimum quality of 45 for all animated content.
       if (isAnimated) {
-        const animFloor = 20;
+        const animFloor = 10;
         if (quality < animFloor) {
           res.setHeader('X-Animation-Quality-Floor', `RAISED_TO_${animFloor}`);
           quality = animFloor;
