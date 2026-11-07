@@ -66,6 +66,7 @@ const AVIF_LIMIT_RESIZE_QUALITY_BOOST = safeInt(process.env.AVIF_LIMIT_RESIZE_QU
 
 const ANALYSIS_MAX_DIM = safeInt(process.env.ANALYSIS_MAX_DIM, 4096);
 const ANALYSIS_MAX_PIXELS = safeInt(process.env.ANALYSIS_MAX_PIXELS, 16_000_000);
+const FULL_STATS_MAX_PIXELS = safeInt(process.env.FULL_STATS_MAX_PIXELS, 40_000_000);
 
 // FEATURE: CPU/event-loop pressure governor
 const CPU_LAG_THRESHOLD_MS = safeInt(process.env.CPU_LAG_THRESHOLD_MS, 80);
@@ -515,15 +516,19 @@ async function generatePlaceholderAndPalette(buffer) {
       });
     }
 
-    let placeholder = null;
+        let placeholder = null;
     if (ENABLE_PLACEHOLDER && !isVoid) {
-      const thumbBuffer = await sharp(buffer, { limitInputPixels: 4_000_000 })
-        .resize(32, 32, { fit: 'inside' })
-        .blur(2)
-        .grayscale()
-        .jpeg({ quality: 20 })
-        .toBuffer();
-      placeholder = 'data:image/jpeg;base64,' + thumbBuffer.toString('base64');
+      try {
+        const thumbBuffer = await sharp(buffer, { limitInputPixels: 4_000_000 })
+          .resize(32, 32, { fit: 'inside' })
+          .blur(2)
+          .grayscale()
+          .jpeg({ quality: 20 })
+          .toBuffer();
+        placeholder = 'data:image/jpeg;base64,' + thumbBuffer.toString('base64');
+      } catch {
+        placeholder = null; // over the 4 Mpx thumbnail limit: keep the palette/void results computed above
+      }
     }
 
     return { placeholder, palette, stdev, isVoid };
@@ -887,16 +892,19 @@ async function detectImageType(buffer, metadata) {
     analysisHeight = Math.max(1, Math.round(analysisHeight * scale));
   }
 
-  let statsPipeline = sharp(buffer, { limitInputPixels: 0 });
-
-  if (analysisWidth < width || analysisHeight < height) {
-    statsPipeline = statsPipeline.resize(analysisWidth, analysisHeight, {
-      fit: 'inside',
-      withoutEnlargement: true
-    });
+    let stats;
+  if (width * height > FULL_STATS_MAX_PIXELS && (analysisWidth < width || analysisHeight < height)) {
+    // sharp's .stats() ignores .resize(), so downscale to a raw buffer first; a huge image is never fully decoded
+    const { data: analysisData, info: analysisInfo } = await sharp(buffer, { limitInputPixels: 0 })
+      .resize(analysisWidth, analysisHeight, { fit: 'inside', withoutEnlargement: true })
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    stats = await sharp(analysisData, {
+      raw: { width: analysisInfo.width, height: analysisInfo.height, channels: analysisInfo.channels }
+    }).stats();
+  } else {
+    stats = await sharp(buffer, { limitInputPixels: 0 }).stats();
   }
-
-  const stats = await statsPipeline.stats();
   const { channels } = stats;
 
   let totalEntropy = 0, totalSharpness = 0, colorVariance = 0;
