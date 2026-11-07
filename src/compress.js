@@ -2116,6 +2116,7 @@ if (!canNativeAnimate && watchdogScaleFactor === 1 && adaptive.predictedMs > har
           signal
         });
 
+                log.info({ event: 'ENCODE_SLOT', reqId, waitedMs: encodeAdmission.waitedMs, queued: encodeAdmission.queued, elapsedMs: Date.now() - (req.proxyStartedAt || startedAt), predictedMs: predictedEncodeMs }, '[ENCODE SLOT ACQUIRED]');
         res.setHeader('X-Adaptive-Encode-Wait', `${encodeAdmission.waitedMs}ms`);
         res.setHeader('X-Adaptive-Encode-Queued', encodeAdmission.queued ? 'TRUE' : 'FALSE');
       } catch (waitErr) {
@@ -2148,6 +2149,32 @@ if (!canNativeAnimate && watchdogScaleFactor === 1 && adaptive.predictedMs > har
 
         res.setHeader('X-Adaptive-Encode-Limit', String(concurrencyGovernor.getEncodeLimit()));
         return Buffer.alloc(0);
+      }
+
+            // C-003: re-budget after the encode-queue wait
+      {
+        const postWait = adaptiveDirector.getEncodeBudget({ startedAt: req.proxyStartedAt || startedAt });
+        const refit = adaptiveDirector.chooseEffort({
+          format: outputFormat,
+          width,
+          height,
+          frames,
+          pixelCost: totalPixelCost,
+          inputFormat: req.opts?.originType || 'image/jpeg',
+          budgetMs: Math.floor(postWait.remainingMs * 0.85),
+          pressure: adaptivePressure
+        });
+        if (refit.effort < safeEncodeEffort) {
+          safeEncodeEffort = refit.effort;
+          res.setHeader('X-Adaptive-Rebudget', `EFFORT_${refit.effort}`);
+        }
+        if (watchdogScaleFactor === 1 && !targetWidth && !targetHeight && refit.risk === 'budget_exceeded') {
+          concurrencyGovernor.releaseEncode({ success: false, timedOut: true });
+          res.setHeader('X-Adaptive-Rebudget', 'REJECTED_AFTER_WAIT');
+          res.setHeader('Retry-After', '5');
+          res.status(504);
+          return Buffer.alloc(0);
+        }
       }
 
       res.setHeader('X-Adaptive-Encode-Active', String(concurrencyGovernor.getStatus().encode.active));
