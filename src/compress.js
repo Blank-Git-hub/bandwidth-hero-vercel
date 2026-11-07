@@ -58,7 +58,7 @@ const SHUTDOWN_TIMEOUT = safeInt(process.env.SHUTDOWN_TIMEOUT, 10000);
 const SHARP_HARD_TIMEOUT_MS = safeInt(process.env.SHARP_HARD_TIMEOUT_MS, 50000);
 
 const AVIF_MAX_PIXELS = safeInt(process.env.AVIF_MAX_PIXELS, 50_000_000);
-const AVIF_MAX_DIMENSION = safeInt(process.env.AVIF_MAX_DIMENSION, 16000);
+const AVIF_MAX_DIMENSION = safeInt(process.env.AVIF_MAX_DIMENSION, 16383);
 const AVIF_MAX_ASPECT_RATIO = safeInt(process.env.AVIF_MAX_ASPECT_RATIO, 200);
 const MIN_AVIF_RESIZED_DIMENSION = safeInt(process.env.MIN_AVIF_RESIZED_DIMENSION, 600);
 const ENABLE_AVIF_EXTREME_FALLBACK = envBool('ENABLE_AVIF_EXTREME_FALLBACK', true);
@@ -2018,7 +2018,7 @@ if (canNativeAnimate) {
 // Native animated: only resize width to preserve strip aspect ratio
 const resizeW = targetWidth || (targetHeight ? Math.round(width * (targetHeight / height)) : Math.min(width, HARD_MAX_DIM));
 pipeline = pipeline.resize({ width: resizeW, withoutEnlargement: true, kernel: sharp.kernel.lanczos3 });
-} else if (targetWidth || targetHeight || width > HARD_MAX_DIM || height > HARD_MAX_DIM) {
+} else if (targetWidth || targetHeight || (metadata.width || 0) > HARD_MAX_DIM || (metadata.height || 0) > HARD_MAX_DIM) {
 const resizeW = targetWidth || HARD_MAX_DIM;
 const resizeH = targetHeight || HARD_MAX_DIM;
 pipeline = pipeline.resize(resizeW, resizeH, {
@@ -2572,7 +2572,12 @@ res.status(502);
       metrics.totalBytesOut += buffer.length;
     }
 
-    if (!res.headersSent && !res.writableEnded) {
+        if (!res.headersSent && !res.writableEnded) {
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.removeHeader('ETag');
+      res.removeHeader('Last-Modified');
+      res.removeHeader('Expires');
       res.status(502).json({ error: 'Compression failed, uncompressed fallback disabled' });
     } else {
       req.socket?.destroy();
