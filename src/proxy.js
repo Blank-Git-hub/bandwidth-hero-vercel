@@ -241,7 +241,8 @@ function extractGhostDims(buffer) {
 
 function sendGhost(res, cacheSeconds = 3600, hint = null, reason = 'unknown') {
   if (!res.headersSent) {
-        res.setHeader('X-Ghost-Reason', reason);
+            res.setHeader('X-Ghost-Reason', reason);
+    if (process.env.FAIL_OPEN_REDIRECT === 'true' && res.locals?.failOpenUrl && !['missing_url', 'invalid_url', 'ssrf_blocked'].includes(reason)) { res.setHeader('X-Fail-Open', reason); res.setHeader('Cache-Control', 'no-store'); return res.redirect(302, res.locals.failOpenUrl); }
     if (['download_budget_exceeded', 'byte_budget_exceeded', 'body_too_large', 'upstream_timeout', 'proxy_error', 'decompress_failed'].includes(reason)) cacheSeconds = 0;
     const accept = String(hint?.accept || '');
     const body = hint?.body;
@@ -630,6 +631,7 @@ export default async function proxy(req, res) {
   return sendGhost(res, 60, null, 'invalid_url');
   }
 
+    res.locals.failOpenUrl = targetUrl;
   const { 'user-agent': userAgent } = req.headers;
 
   let autoReferer = '';
@@ -704,7 +706,7 @@ export default async function proxy(req, res) {
     statusCode = response.statusCode;
     responseHeaders = response.headers;
 
-    if (isWorkerFetch && (statusCode >= 500 || statusCode === 401 || statusCode === 403 || statusCode === 404 || statusCode === 429)) {
+    if (isWorkerFetch && statusCode >= 400) {
       throw new Error('WORKER_RELAY_FAILURE');
     }
   } catch (err) {
