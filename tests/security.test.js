@@ -50,6 +50,13 @@ describe('urlGuard SSRF protection', () => {
     assert.equal(isPublicIP('::ffff:10.0.0.1'), false);
   });
 
+    test('blocks IPv4-compatible IPv6 (::/96)', () => {
+    assert.equal(isPublicIP('::7f00:1'), false);
+    assert.equal(isPublicIP('::a00:1'), false);
+    assert.equal(parseSafeUrl('http://[::7f00:1]/x'), null);
+    assert.equal(parseSafeUrl('http://[::127.0.0.1]/x'), null);
+  });
+
   test('allows IPv4-mapped public IPv6', () => {
     assert.equal(isPublicIP('::ffff:8.8.8.8'), true);
   });
