@@ -640,13 +640,13 @@ export default async function proxy(req, res) {
 
   // Hotlink-protected hosts validate the *embedding page's* Referer, not their own origin.
   // Forward what the browser sent (or what the worker relayed) when present; same exposure as a native image load.
-    let relayReferer = '';
+      let relayReferer = '';
   if (process.env.FORWARD_CLIENT_REFERER !== 'false') {
     const clientRef = String((req.authVia === 'service' ? req.headers['x-client-referer'] : '') || req.headers.referer || '').trim();
     if (clientRef && clientRef.length <= 2048 && /^https?:\/\//i.test(clientRef)) {
       try {
         const refUrl = new URL(clientRef);
-                if (refUrl.host !== req.headers.host) {
+        if (refUrl.host !== req.headers.host) {
           autoReferer = refUrl.href;
           relayReferer = refUrl.href;
         }
