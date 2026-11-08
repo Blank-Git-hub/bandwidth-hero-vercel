@@ -84,8 +84,18 @@ app.use(
 
         url = url.replace(
           /([?&])(api|apikey|api_key|token|access_token|sig|signature|session|auth|secret|key|password)=([^&]*)/gi,
-          '$1$2=[REDACTED]'
+                    '$1$2=[REDACTED]'
         );
+
+        if (process.env.LOG_FULL_URL !== 'true') {
+          url = url.replace(/([?&]url=)([^&]*)/i, (_m, prefix, value) => {
+            try {
+              return prefix + encodeURIComponent(new URL(decodeURIComponent(value)).origin + '/*');
+            } catch {
+              return prefix + '[REDACTED]';
+            }
+          });
+        }
 
         return {
           id: req.id,
