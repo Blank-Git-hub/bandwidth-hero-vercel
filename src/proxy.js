@@ -689,7 +689,7 @@ export default async function proxy(req, res) {
     if (internalKey) {
       isWorkerFetch = true;
       fetchUrl = `${workerBase}/raw?url=${encodeURIComponent(targetUrl)}`;
-            fetchHeaders = { ...headers, 'x-internal-key': internalKey, ...(relayReferer ? { 'x-upstream-referer': relayReferer } : {})
+                  fetchHeaders = { ...headers, 'x-internal-key': internalKey, ...(relayReferer ? { 'x-upstream-referer': relayReferer } : {}) };
     }
   }
 
