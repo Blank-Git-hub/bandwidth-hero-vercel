@@ -162,7 +162,7 @@ export function getEffortLimitByMp({
     if (mp <= 3) return 4;
     if (mp <= 6) return 3;
     if (mp <= 10) return 3;
-    if (mp <= 18) return 2;
+    if (mp <= 18) return 3;
     return 2;
   }
 
