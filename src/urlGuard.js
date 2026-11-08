@@ -103,8 +103,11 @@ export function isPublicIP(ip) {
       addr = addr.toIPv4Address();
     }
 
-    if (addr.kind() === 'ipv6') {
+        if (addr.kind() === 'ipv6') {
       const lower = addr.toString().toLowerCase();
+
+      // IPv4-compatible ::/96 (deprecated; e.g. ::7f00:1, ::a00:1)
+      if (addr.match(ipaddr.parse('::'), 96)) return false;
 
       // Teredo 2001::/32
       const teredoNetwork = ipaddr.parse('2001:0000::');
