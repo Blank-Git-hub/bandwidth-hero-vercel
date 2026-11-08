@@ -258,7 +258,7 @@ setInterval(async () => {
   const rssMB = memoryGovernor.getRssMB();
 
   const tmpLow = tmpFreeMB >= 0 && tmpFreeMB < 64;
-  const rssHigh = rssMB > 950;
+    const rssHigh = rssMB >= memoryGovernor.RSS_ADMISSION_MB;
 
   if (tmpLow || rssHigh) {
     console.warn({
@@ -1476,7 +1476,8 @@ if (canNativeAnimate) {
 }
 
   let thumbResult = null;
-    if ((ENABLE_VOID_WATCHER || ENABLE_PALETTE || ENABLE_PLACEHOLDER) && allowEnhancements) {
+        if ((ENABLE_VOID_WATCHER || ENABLE_PALETTE || ENABLE_PLACEHOLDER) && allowEnhancements &&
+        totalPixelCost + memGov.getActivePixelCost() <= memGov.getPixelBudget()) {
       phaseStart = Date.now();
       thumbResult = await generatePlaceholderAndPalette(buffer);
       watchdog.palette = Date.now() - phaseStart;
@@ -2638,10 +2639,14 @@ res.status(502);
     // If RSS is dangerously high and no other requests are active,
     // gracefully exit to force Vercel to spin up a fresh instance.
     // This prevents the OS OOM-killer from severing active TCP sockets.
-    const currentRssMB = memGov.getRssMB();
-    if (activeRequests === 0 && currentRssMB > 950) {
-      log.warn({ event: 'SELF_RECYCLE', rssMB: currentRssMB }, '[SELF-RECYCLE] High RSS with empty queue, exiting gracefully');
-      process.exit(0);
+        const currentRssMB = memGov.getRssMB();
+    if (activeRequests === 0 && currentRssMB >= memoryGovernor.RSS_ADMISSION_MB) {
+      log.warn({ event: 'SELF_RECYCLE', rssMB: currentRssMB, admissionMB: memoryGovernor.RSS_ADMISSION_MB }, '[SELF-RECYCLE] RSS at admission ceiling with empty queue, recycling after response flush');
+      const recycle = () => setTimeout(() => {
+        if (activeRequests === 0) process.exit(0);
+      }, 250).unref();
+      if (res.writableEnded || res.destroyed) recycle();
+      else res.once('close', recycle);
     }
   }
 }
