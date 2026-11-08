@@ -18,13 +18,22 @@ import params from './src/params.js';
 import proxy from './src/proxy.js';
 import { getMetrics, checkHealth } from './src/compress.js';
 import memoryGovernor from './src/memoryGovernor.js';
+import adaptiveDirector from './src/adaptiveDirector.js';
 
 const brotliCompressAsync = promisify(brotliCompress);
 
 const app = express();
 
+function parseTrustProxy(value) {
+  if (value === undefined) return 1;
+  if (value === 'false') return false;
+  if (value === 'true') return true;
+  const n = parseInt(value, 10);
+  return Number.isFinite(n) ? n : value;
+}
+
 app.disable('x-powered-by');
-app.set('trust proxy', 1);
+app.set('trust proxy', parseTrustProxy(process.env.TRUST_PROXY));
 
 app.use(helmet({
   contentSecurityPolicy: false,
@@ -35,10 +44,26 @@ app.use(helmet({
 
 // F20: Request ID middleware
 app.use((req, res, next) => {
-  const reqId = req.headers['x-request-id'] || crypto.randomUUID();
-  req.id = reqId;
-  res.setHeader('X-Request-ID', reqId);
-  next();
+const rawReqId = req.headers['x-request-id'];
+const reqId = typeof rawReqId === 'string' && /^[A-Za-z0-9._:-]{1,64}$/.test(rawReqId)
+  ? rawReqId
+  : crypto.randomUUID();
+req.id = reqId;
+res.setHeader('X-Request-ID', reqId);
+const ac = new AbortController();
+try {
+  Object.defineProperty(req, 'signal', {
+    value: ac.signal,
+    writable: true,
+    configurable: true
+  });
+} catch {
+  req.abortSignal = ac.signal;
+}
+res.on('close', () => {
+if (!res.writableEnded) ac.abort(new Error('CLIENT_DISCONNECT'));
+});
+next();
 });
 
 const logger = pino({
@@ -72,6 +97,46 @@ app.use(
     }
   })
 );
+
+app.use((req, res, next) => {
+  res.on('finish', () => {
+    const log = req.log || logger;
+
+    const rawLength = res.getHeader('content-length');
+    const contentLength = rawLength === undefined ? null : String(rawLength);
+    const contentType = String(res.getHeader('content-type') || '');
+    const ghost = String(res.getHeader('x-ghost') || '').toLowerCase() === 'true';
+    const ghostReason = String(res.getHeader('x-ghost-reason') || '');
+    const status = res.statusCode;
+
+    const emptyBody = contentLength === null || contentLength === '0';
+    const suspicious =
+      status === 304 ||
+      ghost ||
+      emptyBody ||
+      contentType.startsWith('image/');
+
+    if (!suspicious) return;
+
+    log.info({
+      event: 'RESPONSE_FINAL',
+      reqId: req.id,
+      status,
+      contentLength,
+      contentType: contentType || null,
+      ghost,
+      ghostReason,
+      adaptiveConcurrency: String(res.getHeader('x-adaptive-concurrency') || ''),
+      memoryGovernor: String(res.getHeader('x-memory-governor') || ''),
+      encodeWait: String(res.getHeader('x-adaptive-encode-wait') || ''),
+      encodeQueued: String(res.getHeader('x-adaptive-encode-queued') || ''),
+      timeoutGuillotine: String(res.getHeader('x-timeout-guillotine') || ''),
+      path: String(req.url || '').split('?')[0]
+    }, '[RESPONSE FINAL]');
+  });
+
+  next();
+});
 
 // Brotli JSON compression for admin endpoints
 app.use((req, res, next) => {
@@ -118,6 +183,14 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
+    res.setHeader('Allow', 'GET, HEAD, OPTIONS');
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
+  next();
+});
+
 // Health endpoints
 app.get('/healthz', (req, res) => {
   res.json({ status: 'ok' });
@@ -136,7 +209,10 @@ app.get('/metrics', authenticate, (req, res) => {
 app.get('/deep-health', authenticate, async (req, res) => {
   try {
     const health = await checkHealth();
-    res.status(health.healthy ? 200 : 503).json(health);
+    res.status(health.healthy ? 200 : 503).json({
+      ...health,
+      adaptiveDirector: adaptiveDirector.getStatus()
+    });
   } catch (err) {
     res.status(500).json({ error: 'Health check failed' });
   }

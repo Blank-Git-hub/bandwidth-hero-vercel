@@ -10,7 +10,7 @@ const { LOGIN, PASSWORD, API_KEY, VERCEL_SERVICE_KEY } = process.env;
 
 // F5-MODIFIED: Legacy query auth toggle
 const ALLOW_QUERY_API_KEY = ['1', 'true', 'yes', 'on'].includes(
-  String(process.env.ALLOW_QUERY_API_KEY || 'true').trim().toLowerCase()
+  String(process.env.ALLOW_QUERY_API_KEY || 'false').trim().toLowerCase()
 );
 
 if (ALLOW_QUERY_API_KEY && API_KEY) {
@@ -42,9 +42,9 @@ const KEY_RATE_LIMIT_MAX =
 
 const parsedServiceKeyMax = parseInt(process.env.SERVICE_KEY_RATE_LIMIT_MAX, 10);
 const SERVICE_KEY_RATE_LIMIT_MAX =
-  Number.isFinite(parsedServiceKeyMax) && parsedServiceKeyMax >= 0
-    ? parsedServiceKeyMax
-    : 0;
+Number.isFinite(parsedServiceKeyMax) && parsedServiceKeyMax > 0
+? parsedServiceKeyMax
+: REQ_RATE_LIMIT_MAX * 100;
 
 function credentialIdentity(label, secret) {
   if (!secret || typeof secret !== 'string') return null;
@@ -190,7 +190,8 @@ export default async function authenticate(req, res, next) {
   // 0. Check Internal Service Key (from Cloudflare Worker - F10 FIX)
   const serviceKey = req.headers['x-vercel-service-key'];
   if (VERCEL_SERVICE_KEY && serviceKey && safeCompare(serviceKey, VERCEL_SERVICE_KEY)) {
-    const serviceIdentity = credentialIdentity('svc', VERCEL_SERVICE_KEY);
+req.authVia = 'service';
+const serviceIdentity = credentialIdentity('svc', VERCEL_SERVICE_KEY);
 
     if (!(await allowKeyRequest(serviceIdentity, SERVICE_KEY_RATE_LIMIT_MAX))) {
       res.setHeader('Retry-After', String(Math.ceil(KEY_RATE_LIMIT_WINDOW_MS / 1000)));
@@ -217,8 +218,9 @@ export default async function authenticate(req, res, next) {
     }
 
     await clearAuthFailure(clientKey);
-    return next();
-  }
+await recordSuccessfulRequest(clientKey);
+return next();
+}
 
   // 2. Check Query String API Key (F5-MODIFIED: legacy support)
   if (ALLOW_QUERY_API_KEY) {
@@ -238,8 +240,9 @@ export default async function authenticate(req, res, next) {
       }
 
       await clearAuthFailure(clientKey);
-      return next();
-    }
+await recordSuccessfulRequest(clientKey);
+return next();
+}
   }
 
   // 3. Check Basic Auth
@@ -260,8 +263,9 @@ export default async function authenticate(req, res, next) {
       }
 
       await clearAuthFailure(clientKey);
-      return next();
-    }
+await recordSuccessfulRequest(clientKey);
+return next();
+}
   }
 
   // 4. Deny access

@@ -24,7 +24,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote add upstream https://github.com/hos1818/bandwidth-hero-vercel.git 2>/dev/null || true
+          git remote add upstream https://github.com/Entryway0993/bandwidth-hero-vercel.git 2>/dev/null || true
           git fetch upstream
           
           # Check if upstream/main is already an ancestor of our HEAD

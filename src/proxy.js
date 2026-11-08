@@ -35,9 +35,9 @@ function envBoolLocal(name, fallback = false) {
   return v === '1' || v === 'true' || v === 'yes';
 }
 
-const RAW_VAULT_MAX_BYTES = 20 * 1024 * 1024;
-const RAW_VAULT_MAX_ENTRY = 4 * 1024 * 1024;
-const RAW_VAULT_MAX_ENTRIES = 30;
+const RAW_VAULT_MAX_BYTES = 8 * 1024 * 1024;
+const RAW_VAULT_MAX_ENTRY = 1 * 1024 * 1024;
+const RAW_VAULT_MAX_ENTRIES = 10;
 
 const RAW_VAULT_ENTRY_OVERHEAD = 512;
 
@@ -241,7 +241,8 @@ function extractGhostDims(buffer) {
 
 function sendGhost(res, cacheSeconds = 3600, hint = null, reason = 'unknown') {
   if (!res.headersSent) {
-    res.setHeader('X-Ghost-Reason', reason);
+        res.setHeader('X-Ghost-Reason', reason);
+    if (['download_budget_exceeded', 'byte_budget_exceeded', 'body_too_large', 'upstream_timeout', 'proxy_error', 'decompress_failed'].includes(reason)) cacheSeconds = 0;
     const accept = String(hint?.accept || '');
     const body = hint?.body;
 
@@ -307,10 +308,19 @@ function redactUrlForCache(urlStr) {
 }
 
 function sanitizeError(err) {
-  let msg = err?.message ? String(err.message) : 'Unknown error';
-  msg = msg.replace(/\?[^\s]*/g, '');
-  msg = msg.replace(/(api[_-]?key|apikey|api|key|token|secret|password)=([^\s&]*)/gi, '$1=[REDACTED]');
-  return msg;
+let msg = err?.message ? String(err.message) : 'Unknown error';
+msg = msg.replace(/\?[^\s]*/g, '');
+msg = msg.replace(/(api[_-]?key|apikey|api|key|token|secret|password)=([^\s&]*)/gi, '$1=[REDACTED]');
+return msg;
+}
+// OBSERVABILITY: safe, redacted, single-line preview of upstream failure bodies.
+function bodyPreview(buffer, maxBytes = 64) {
+if (!Buffer.isBuffer(buffer) || buffer.length === 0) return '';
+const slice = buffer.subarray(0, Math.min(maxBytes, buffer.length));
+let text = slice.toString('utf8');
+text = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '\uFFFD');
+text = text.replace(/(api[_-]?key|apikey|api|key|token|secret|password|keystamp)=([^\s&;]*)/gi, '$1=[REDACTED]');
+return text;
 }
 
 function isClientAborted(req) {
@@ -540,7 +550,7 @@ const RETRYABLE_CODES = new Set([
   'UND_ERR_BODY_TIMEOUT', 'UPSTREAM_DEADLINE', 'ECONNRESET', 'UND_ERR_CONNECT_TIMEOUT'
 ]);
 
-const RETRYABLE_STATUSES = new Set([502, 503, 504, 429, 520, 521, 522, 523, 524]);
+const RETRYABLE_STATUSES = new Set([408, 500, 502, 503, 504, 429, 520, 521, 522, 523, 524]);
 
 async function fetchWithBackoff(url, headers, signal) {
   const totalDeadline = Date.now() + UPSTREAM_TOTAL_DEADLINE_MS;
@@ -589,6 +599,7 @@ async function fetchWithBackoff(url, headers, signal) {
 
 export default async function proxy(req, res) {
   const startTime = Date.now();
+  req.proxyStartedAt = startTime;
   const reqId = req.id || 'unknown';
   const log = req.log || console;
 
@@ -720,8 +731,10 @@ export default async function proxy(req, res) {
     }
   }
 
-  try {
-    let rawBody;
+  let reservedBodyBytes = 0;
+
+try {
+  let rawBody;
 
     if (statusCode === 304 && vaultEntry) {
       rawBody = vaultEntry.raw;
@@ -739,10 +752,20 @@ export default async function proxy(req, res) {
       }
     }
 
+    log.info({ event: 'FETCH_COMPLETE', reqId, fetchMs: Date.now() - startTime, bytes: rawBody.length });
+    
     const downloadBudget = memoryGovernor.getDownloadBudget();
     if (rawBody.length > downloadBudget) {
       return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'download_budget_exceeded');
     }
+
+  if (rawBody.length > 0) {
+  if (!memoryGovernor.admitBytes(rawBody.length)) {
+    return sendGhost(res, 60, { body: rawBody, accept: req.headers.accept }, 'byte_budget_exceeded');
+  }
+
+  reservedBodyBytes = rawBody.length;
+  }
     
     if (statusCode === 200 && rawBody.length <= RAW_VAULT_MAX_ENTRY) {
       const upstreamEtag = responseHeaders['etag'] || null;
@@ -757,13 +780,38 @@ export default async function proxy(req, res) {
     const upstreamMaxAgeMatch = upstreamCacheControl.match(/max-age=(\d+)/i);
     const upstreamMaxAge = upstreamMaxAgeMatch ? parseInt(upstreamMaxAgeMatch[1], 10) : null;
 
-    if (statusCode === 404) return sendGhost(res, 86400, { body: rawBody, accept: req.headers.accept }, 'upstream_404');
+    if (statusCode === 404 || statusCode === 410 || statusCode === 403 || (statusCode !== 304 && (statusCode < 200 || statusCode >= 300))) {
+log.warn({
+event: 'GHOST',
+reqId,
+reason: statusCode === 404 ? 'upstream_404' : statusCode === 410 ? 'upstream_410_gone' : statusCode === 403 ? 'upstream_403' : `upstream_error_${statusCode}`,
+upstreamStatus: statusCode,
+bytes: rawBody.length,
+bodyPreview: bodyPreview(rawBody, 64),
+url: sanitizeUrl(targetUrl)
+}, '[GHOST] Upstream error status');
+}
+if (statusCode === 404) return sendGhost(res, 86400, { body: rawBody, accept: req.headers.accept }, 'upstream_404');
 if (statusCode === 410) return sendGhost(res, 86400, { body: rawBody, accept: req.headers.accept }, 'upstream_410_gone');
 if (statusCode === 403) return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'upstream_403');
-if (statusCode !== 304 && (statusCode < 200 || statusCode >= 300)) return sendGhost(res, 60, { body: rawBody, accept: req.headers.accept }, 'upstream_error');
-
+if (statusCode !== 304 && (statusCode < 200 || statusCode >= 300)) {
+return sendGhost(res, 60, { body: rawBody, accept: req.headers.accept }, `upstream_error_${statusCode}`);
+}
+  
     const detectedType = detectContentType(rawBody);
-if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'not_an_image');
+if (!detectedType.startsWith('image/')) {
+log.warn({
+event: 'GHOST',
+reqId,
+reason: 'not_an_image',
+upstreamStatus: statusCode,
+upstreamType: detectedType,
+bytes: rawBody.length,
+bodyPreview: bodyPreview(rawBody, 64),
+url: sanitizeUrl(targetUrl)
+}, '[GHOST] Upstream returned non-image body');
+return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'not_an_image');
+}
     
     if (req.query?.debug === '1') {
       try {
@@ -797,7 +845,11 @@ if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawB
 
     const etag = await generateETag(req, targetUrl, responseHeaders, rawBody);
 
-    if (req.headers['if-none-match'] === etag) {
+    const allowConditional = ['1', 'true', 'yes', 'on'].includes(
+      String(req.query?.etag || req.query?.conditional || '').toLowerCase()
+    );
+
+    if (allowConditional && req.headers['if-none-match'] === etag) {
       res.setHeader('ETag', etag);
       return res.status(304).end();
     }
@@ -899,13 +951,23 @@ if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawB
             }
 
             const retryBudget = memoryGovernor.getDownloadBudget();
-            if (decompressedRetry.length > retryBudget) continue;
+if (decompressedRetry.length > retryBudget) continue;
+const retryType = detectContentType(decompressedRetry);
+if (!retryType.startsWith('image/')) continue;
 
-            const retryType = detectContentType(decompressedRetry);
-            if (!retryType.startsWith('image/')) continue;
+// C-014: Fix memory accounting for retry body
+if (reservedBodyBytes > 0) {
+  memoryGovernor.releaseBytes(reservedBodyBytes);
+  reservedBodyBytes = 0;
+}
+if (!memoryGovernor.admitBytes(decompressedRetry.length)) {
+  continue;
+}
+reservedBodyBytes = decompressedRetry.length;
+rawBody = decompressedRetry;
 
-            // Retry compress with fresh body
-            compressedResult = await compress(req, res, decompressedRetry, memoryGovernor);
+// Retry compress with fresh body
+compressedResult = await compress(req, res, decompressedRetry, memoryGovernor);
             retrySuccess = true;
             res.setHeader('X-Corrupt-Retry', `SUCCESS_ATTEMPT_${attempt}`);
             rawBody = decompressedRetry;
@@ -921,21 +983,35 @@ if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawB
         }
 
         if (!retrySuccess && !compressedResult) {
-          log.error({ reqId }, '[CORRUPT RETRY] All retry attempts exhausted');
-          return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'corrupt_image');
-        }
+log.error({
+reqId,
+bytes: rawBody.length,
+bodyPreview: bodyPreview(rawBody, 64),
+url: sanitizeUrl(targetUrl)
+}, '[CORRUPT RETRY] All retry attempts exhausted');
+return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'corrupt_image');
+}
       } else if (compressError) {
         throw compressError;
       }
 
-      if (!res.writableEnded) {
+            if (!res.writableEnded) {
         if (compressedResult && compressedResult.length > 0) {
           res.end(compressedResult);
+        } else if (!res.headersSent && res.statusCode === 200) {
+          res.setHeader('Cache-Control', 'no-store');
+          res.removeHeader('ETag');
+          res.status(502).json({ error: 'Empty compression result' });
         } else {
+          if (!res.headersSent) {
+            res.setHeader('Cache-Control', 'no-store');
+            res.removeHeader('ETag');
+            res.removeHeader('Content-Type');
+          }
           res.end();
         }
       }
-
+      
       return;
     }
 
@@ -949,6 +1025,7 @@ if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawB
       error.code === 'BODY_TOO_LARGE';
 
     if (isBodyTooLarge) return sendGhost(res, 3600, null, 'body_too_large');
+
     const code = error.code;
 
     if (code === 'SSRF_BLOCKED_REDIRECT' || code === 'SSRF_BLOCKED_DNS') {
@@ -967,5 +1044,9 @@ if (!detectedType.startsWith('image/')) return sendGhost(res, 3600, { body: rawB
 
     log.error({ reqId, error: sanitizeError(error) }, '[PROXY ERROR]');
     return sendGhost(res, 60, null, 'proxy_error');
+  } finally {
+    if (reservedBodyBytes > 0) {
+      memoryGovernor.releaseBytes(reservedBodyBytes);
+    }
   }
 }
