@@ -241,7 +241,8 @@ function extractGhostDims(buffer) {
 
 function sendGhost(res, cacheSeconds = 3600, hint = null, reason = 'unknown') {
   if (!res.headersSent) {
-    res.setHeader('X-Ghost-Reason', reason);
+        res.setHeader('X-Ghost-Reason', reason);
+    if (['download_budget_exceeded', 'byte_budget_exceeded', 'body_too_large', 'upstream_timeout', 'proxy_error', 'decompress_failed'].includes(reason)) cacheSeconds = 0;
     const accept = String(hint?.accept || '');
     const body = hint?.body;
 
@@ -994,12 +995,19 @@ return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'corr
         throw compressError;
       }
 
-      if (!res.writableEnded) {
+            if (!res.writableEnded) {
         if (compressedResult && compressedResult.length > 0) {
           res.end(compressedResult);
         } else if (!res.headersSent && res.statusCode === 200) {
+          res.setHeader('Cache-Control', 'no-store');
+          res.removeHeader('ETag');
           res.status(502).json({ error: 'Empty compression result' });
         } else {
+          if (!res.headersSent) {
+            res.setHeader('Cache-Control', 'no-store');
+            res.removeHeader('ETag');
+            res.removeHeader('Content-Type');
+          }
           res.end();
         }
       }
