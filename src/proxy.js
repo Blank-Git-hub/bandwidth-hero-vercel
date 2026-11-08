@@ -635,8 +635,20 @@ export default async function proxy(req, res) {
   let autoReferer = '';
   try {
     const parsedTarget = new URL(targetUrl);
-    autoReferer = parsedTarget.origin;
+        autoReferer = parsedTarget.origin;
   } catch {}
+
+  // Hotlink-protected hosts validate the *embedding page's* Referer, not their own origin.
+  // Forward what the browser sent (or what the worker relayed) when present; same exposure as a native image load.
+  if (process.env.FORWARD_CLIENT_REFERER !== 'false') {
+    const clientRef = String((req.authVia === 'service' ? req.headers['x-client-referer'] : '') || req.headers.referer || '').trim();
+    if (clientRef && clientRef.length <= 2048 && /^https?:\/\//i.test(clientRef)) {
+      try {
+        const refUrl = new URL(clientRef);
+        if (refUrl.host !== req.headers.host) autoReferer = refUrl.href;
+      } catch {}
+    }
+  }
 
   const headers = {
     'user-agent': userAgent || getRandomUA(),
@@ -673,7 +685,7 @@ export default async function proxy(req, res) {
     if (internalKey) {
       isWorkerFetch = true;
       fetchUrl = `${workerBase}/raw?url=${encodeURIComponent(targetUrl)}`;
-      fetchHeaders = { ...headers, 'x-internal-key': internalKey };
+            fetchHeaders = { ...headers, 'x-internal-key': internalKey, ...(headers.referer ? { 'x-upstream-referer': headers.referer } : {}) };
     }
   }
 
@@ -715,7 +727,7 @@ export default async function proxy(req, res) {
     // WAFs/CDNs often block requests where Referer matches the image origin,
     // sometimes returning 403, sometimes 404 to hide the file's existence.
     // Strip referer on retry to mimic native app/direct load behavior.
-    const { referer, 'sec-fetch-site': _sfs, ...restHeaders } = activeHeaders;
+        const { referer, 'x-upstream-referer': _xur, 'sec-fetch-site': _sfs, ...restHeaders } = activeHeaders;
     const retryHeaders = {
       ...restHeaders,
       'user-agent': getRandomUA(),
@@ -791,9 +803,9 @@ bodyPreview: bodyPreview(rawBody, 64),
 url: sanitizeUrl(targetUrl)
 }, '[GHOST] Upstream error status');
 }
-if (statusCode === 404) return sendGhost(res, 86400, { body: rawBody, accept: req.headers.accept }, 'upstream_404');
+if (statusCode === 404) return sendGhost(res, 300, { body: rawBody, accept: req.headers.accept }, 'upstream_404')
 if (statusCode === 410) return sendGhost(res, 86400, { body: rawBody, accept: req.headers.accept }, 'upstream_410_gone');
-if (statusCode === 403) return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'upstream_403');
+if (statusCode === 403) return sendGhost(res, 300, { body: rawBody, accept: req.headers.accept }, 'upstream_403')
 if (statusCode !== 304 && (statusCode < 200 || statusCode >= 300)) {
 return sendGhost(res, 60, { body: rawBody, accept: req.headers.accept }, `upstream_error_${statusCode}`);
 }
@@ -883,7 +895,8 @@ return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'not_
       (requestedFormat === 'avif' && detectedType === 'image/avif');
 
     const isModernFormat = detectedType === 'image/webp' || detectedType === 'image/avif';
-    const isSmallFile = rawBody.length < 150 * 1024;
+        const bypassKb = Number.parseInt(process.env.BYPASS_SMALL_MODERN_KB ?? '150', 10);
+    const isSmallFile = Number.isFinite(bypassKb) && rawBody.length < bypassKb * 1024;
 
     if (isModernFormat && isSmallFile && formatMatchesDetected) {
       return bypass(req, res, rawBody, statusCode);
