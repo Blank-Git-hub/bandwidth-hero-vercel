@@ -704,14 +704,14 @@ export default async function proxy(req, res) {
     statusCode = response.statusCode;
     responseHeaders = response.headers;
 
-    if (isWorkerFetch && (statusCode >= 500 || statusCode === 403 || statusCode === 404)) {
+    if (isWorkerFetch && (statusCode >= 500 || statusCode === 401 || statusCode === 403 || statusCode === 404 || statusCode === 429)) {
       throw new Error('WORKER_RELAY_FAILURE');
     }
   } catch (err) {
     if (isClientAborted(req)) return;
 
         if (isWorkerFetch) {
-      log.warn({ event: 'WORKER_RELAY_FALLBACK', reqId, workerStatus: statusCode ?? null, workerError: sanitizeError(err), workerContentType: responseHeaders?.['content-type'] ?? null }, '[RELAY] Cloudflare worker fetch failed, falling back to direct');
+      log.warn({ event: 'WORKER_RELAY_FALLBACK', reqId, workerStatus: statusCode ?? null, workerError: sanitizeError(err), workerContentType: responseHeaders?.['content-type'] ?? null, workerBody: bodyPreview(response?.body, 120) };
       activeUrl = targetUrl;
       activeHeaders = headers;
 
