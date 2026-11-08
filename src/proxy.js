@@ -711,7 +711,7 @@ export default async function proxy(req, res) {
     if (isClientAborted(req)) return;
 
         if (isWorkerFetch) {
-      log.warn({ event: 'WORKER_RELAY_FALLBACK', reqId, workerStatus: statusCode ?? null, workerError: sanitizeError(err), workerContentType: responseHeaders?.['content-type'] ?? null, workerBody: bodyPreview(response?.body, 120) };
+      log.warn({ event: 'WORKER_RELAY_FALLBACK', reqId, workerStatus: statusCode ?? null, workerError: sanitizeError(err), workerContentType: responseHeaders?.['content-type'] ?? null, workerBody: bodyPreview(response?.body, 120) }, '[RELAY] Cloudflare worker fetch failed, falling back to direct');
       activeUrl = targetUrl;
       activeHeaders = headers;
 
