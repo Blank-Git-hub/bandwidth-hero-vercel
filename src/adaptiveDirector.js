@@ -467,8 +467,10 @@ export function recordEncode({
     entry.timeouts++;
   }
 
-  if (!success) {
+    if (!success) {
     entry.failures++;
+  } else if (!timedOut && entry.failures > 0) {
+    entry.failures--;
   }
 
   if (Number.isFinite(encodeMs) && encodeMs > 0) {
@@ -525,7 +527,7 @@ export function recordRejection({
     failures: 0
   };
 
-  entry.failures = Math.min(1000, entry.failures + 1);
+    entry.rejections = Math.min(1000, (entry.rejections || 0) + 1);
 
   stats.set(key, entry);
 }
