@@ -640,12 +640,16 @@ export default async function proxy(req, res) {
 
   // Hotlink-protected hosts validate the *embedding page's* Referer, not their own origin.
   // Forward what the browser sent (or what the worker relayed) when present; same exposure as a native image load.
+    let relayReferer = '';
   if (process.env.FORWARD_CLIENT_REFERER !== 'false') {
     const clientRef = String((req.authVia === 'service' ? req.headers['x-client-referer'] : '') || req.headers.referer || '').trim();
     if (clientRef && clientRef.length <= 2048 && /^https?:\/\//i.test(clientRef)) {
       try {
         const refUrl = new URL(clientRef);
-        if (refUrl.host !== req.headers.host) autoReferer = refUrl.href;
+                if (refUrl.host !== req.headers.host) {
+          autoReferer = refUrl.href;
+          relayReferer = refUrl.href;
+        }
       } catch {}
     }
   }
@@ -685,7 +689,7 @@ export default async function proxy(req, res) {
     if (internalKey) {
       isWorkerFetch = true;
       fetchUrl = `${workerBase}/raw?url=${encodeURIComponent(targetUrl)}`;
-            fetchHeaders = { ...headers, 'x-internal-key': internalKey, ...(headers.referer ? { 'x-upstream-referer': headers.referer } : {}) };
+            fetchHeaders = { ...headers, 'x-internal-key': internalKey, ...(relayReferer ? { 'x-upstream-referer': relayReferer } : {})
     }
   }
 
@@ -706,7 +710,8 @@ export default async function proxy(req, res) {
   } catch (err) {
     if (isClientAborted(req)) return;
 
-    if (isWorkerFetch) {
+        if (isWorkerFetch) {
+      log.warn({ event: 'WORKER_RELAY_FALLBACK', reqId, workerStatus: statusCode ?? null, workerError: sanitizeError(err), workerContentType: responseHeaders?.['content-type'] ?? null }, '[RELAY] Cloudflare worker fetch failed, falling back to direct');
       activeUrl = targetUrl;
       activeHeaders = headers;
 
