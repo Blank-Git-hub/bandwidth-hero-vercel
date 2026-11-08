@@ -1309,7 +1309,7 @@ const bytesPerChannel =
 const bytesPerPixel = Math.max(3, metadataChannels * bytesPerChannel);
 const pixelWeight = Math.max(1, bytesPerPixel / 6);
 
-totalPixelCost = Math.ceil(width * height * frames * pixelWeight);
+totalPixelCost = Math.ceil(Math.max(width * height, (metadata.width || 0) * (metadata.height || 0)) * frames * pixelWeight);
 
     const formatDecision = chooseOutputFormat(metadata, totalPixelCost, req.opts?.format);
     const outputFormat = formatDecision.format;
