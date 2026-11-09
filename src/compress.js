@@ -2595,6 +2595,10 @@ res.status(502);
 
     const safeMessage = err?.message ? String(err.message).split('?')[0] : 'Unknown compress error';
     const tmpFreeMB = await getTmpFreeMB();
+        // Corrupt/truncated input: let the proxy re-fetch and retry instead of failing here.
+    if (/corrupt|premature end|invalid image/i.test(safeMessage) && !res.headersSent && !res.writableEnded) {
+      throw err;
+    }
 
     log.error({
       reqId,
