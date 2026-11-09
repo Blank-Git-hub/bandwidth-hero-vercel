@@ -2080,7 +2080,9 @@ kernel: sharp.kernel.lanczos3,
       }
 
       // Banding exorcist
-      if (bandingExorcistActive) {
+            const ditherW = targetWidth || (targetHeight ? Math.round(baseW * (targetHeight / baseH)) : baseW);
+      const ditherH = targetHeight || (targetWidth ? Math.round(baseH * (targetWidth / baseW)) : baseH);
+      if (bandingExorcistActive && ditherW >= 128 && ditherH >= 128) {
         const noiseTile = await getNoiseTile();
         pipeline = pipeline.composite([{ input: noiseTile, tile: true, blend: 'over' }]);
         res.setHeader('X-Banding-Exorcist', 'ACTIVE');
