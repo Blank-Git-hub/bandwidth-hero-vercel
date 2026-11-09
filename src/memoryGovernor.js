@@ -1,4 +1,5 @@
 import process from 'node:process';
+import os from 'node:os';
 
 const MB = 1024 * 1024;
 
@@ -12,7 +13,21 @@ function safeFloat(value, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-const MEMORY_CEILING_MB = safeInt(process.env.MEMORY_CEILING_MB, 1024);
+// Auto-detect the real memory limit (cgroup limit if present, else machine memory), keep 15% headroom
+// for the OS and native buffers, and clamp to a sane range. MEMORY_CEILING_MB still overrides.
+function detectCeilingMB() {
+  try {
+    const sizes = [];
+    const cgroup = typeof process.constrainedMemory === 'function' ? process.constrainedMemory() : 0;
+    if (cgroup > 0 && cgroup < 2 ** 50) sizes.push(cgroup);
+    sizes.push(os.totalmem());
+    const mb = Math.floor((Math.min(...sizes) / MB) * 0.85);
+    if (Number.isFinite(mb) && mb >= 512) return Math.min(mb, 3500);
+  } catch {}
+  return 1024;
+}
+
+const MEMORY_CEILING_MB = safeInt(process.env.MEMORY_CEILING_MB, detectCeilingMB());
 const RSS_WALL_OFFSET_MB = safeInt(process.env.RSS_WALL_OFFSET_MB, 25);
 const RSS_ADMISSION_OFFSET_MB = safeInt(process.env.RSS_ADMISSION_OFFSET_MB, 60);
 const PIXEL_MEMORY_DIVISOR = safeInt(process.env.PIXEL_MEMORY_DIVISOR, 6);
