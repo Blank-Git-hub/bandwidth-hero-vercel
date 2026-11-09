@@ -750,6 +750,22 @@ export default async function proxy(req, res) {
     }
   }
 
+    // Last resort: fetch the way the app itself does (client's own UA, no browser-only headers).
+  // Some hosts reject header sets that contradict the client's UA.
+  if (statusCode === 401 || statusCode === 403 || statusCode === 404) {
+    try {
+      const nativeResponse = await fetchWithBackoff(targetUrl, { 'user-agent': userAgent || getRandomUA(), 'accept-encoding': UPSTREAM_ACCEPT_ENCODING }, req.signal);
+      if (nativeResponse.statusCode < 400) {
+        log.info({ event: 'NATIVE_FETCH_OK', reqId, status: nativeResponse.statusCode }, '[NATIVE] App-style fetch succeeded after browser-style attempts failed');
+        response = nativeResponse;
+        statusCode = nativeResponse.statusCode;
+        responseHeaders = nativeResponse.headers;
+      }
+    } catch (err) {
+      if (isClientAborted(req)) return;
+    }
+  }
+
   let reservedBodyBytes = 0;
 
 try {
