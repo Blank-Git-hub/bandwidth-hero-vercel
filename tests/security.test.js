@@ -84,6 +84,18 @@ describe('urlGuard SSRF protection', () => {
     assert.notEqual(result, null);
     assert.equal(result.hostname, 'example.com');
   });
+
+  test('parseSafeUrl blocks dangerous service ports on public hosts', () => {
+    assert.equal(parseSafeUrl('http://8.8.8.8:22/'), null);
+    assert.equal(parseSafeUrl('http://8.8.8.8:25/'), null);
+    assert.equal(parseSafeUrl('http://8.8.8.8:6379/'), null);
+  });
+
+  test('parseSafeUrl still allows normal and custom web ports', () => {
+    assert.notEqual(parseSafeUrl('https://example.com/x.jpg'), null);
+    assert.notEqual(parseSafeUrl('http://example.com:8080/x.jpg'), null);
+    assert.notEqual(parseSafeUrl('https://example.com:8443/x.jpg'), null);
+  });
 });
 
 describe('shouldCompress', () => {
