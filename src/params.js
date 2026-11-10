@@ -168,6 +168,41 @@ function parseFormat(req) {
   return 'avif';
 }
 
+const PROXY_PARAM_NAMES = new Set([
+  'api', 'apikey', 'api_key', 'jpeg', 'avif', 'webp', 'bw', 'l', 'q', 'quality',
+  'max_dim', 'maxdim', 'max', 'strip_w', 'stripw', 'strip_width', 'rotate', 'mode',
+  'sharpen', 'minsize', 'etag', 'conditional', 'debug', INTERNAL_FORMAT_PARAM
+]);
+
+// Some clients append the image URL UNENCODED (...&url=https://cdn/x.jpg?a=1&b=2).
+// The query parser then cuts it at the first "&". Recover the full URL from the raw query string.
+// Percent-encoded URLs (url=https%3A%2F%2F...) never match, so well-behaved clients are unaffected.
+function recoverUnencodedUrl(req) {
+  const rawUrl = req.originalUrl || req.url || '';
+  const qIndex = rawUrl.indexOf('?');
+  if (qIndex === -1) return undefined;
+
+  const match = rawUrl.slice(qIndex + 1).match(/(?:^|[?&])url=(https?:\/\/.+)$/i);
+  if (!match) return undefined;
+
+  let value = match[1];
+
+  // Peel trailing "&name=value" segments that belong to this proxy, not to the image URL.
+  for (;;) {
+    const amp = value.lastIndexOf('&');
+    if (amp === -1) break;
+    const name = value.slice(amp + 1).split('=')[0].toLowerCase();
+    if (!PROXY_PARAM_NAMES.has(name)) break;
+    value = value.slice(0, amp);
+  }
+
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 function extractHiddenUrlFromRaw(req) {
   const rawUrl = req.originalUrl || req.url || '';
   const qIndex = rawUrl.indexOf('?');
@@ -206,6 +241,11 @@ function params(req, res, next) {
 
     if (isPlainObject(url)) {
       return res.status(400).json({ error: 'Invalid URL parameter.' });
+    }
+
+    const recoveredUrl = recoverUnencodedUrl(req);
+    if (recoveredUrl) {
+      url = recoveredUrl;
     }
 
     if (url === undefined || url === null || url === '') {
