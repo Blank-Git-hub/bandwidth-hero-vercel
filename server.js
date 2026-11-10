@@ -19,6 +19,7 @@ import proxy from './src/proxy.js';
 import { getMetrics, checkHealth } from './src/compress.js';
 import memoryGovernor from './src/memoryGovernor.js';
 import adaptiveDirector from './src/adaptiveDirector.js';
+import inflight from './src/inflight.js';
 
 const brotliCompressAsync = promisify(brotliCompress);
 
@@ -50,6 +51,11 @@ const reqId = typeof rawReqId === 'string' && /^[A-Za-z0-9._:-]{1,64}$/.test(raw
   : crypto.randomUUID();
 req.id = reqId;
 res.setHeader('X-Request-ID', reqId);
+  inflight.enter();
+let inflightLeft = false;
+const inflightLeave = () => { if (!inflightLeft) { inflightLeft = true; inflight.leave(); } };
+res.on('close', inflightLeave);
+res.on('finish', inflightLeave);
 const ac = new AbortController();
 try {
   Object.defineProperty(req, 'signal', {
