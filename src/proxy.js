@@ -242,7 +242,7 @@ function extractGhostDims(buffer) {
 function sendGhost(res, cacheSeconds = 3600, hint = null, reason = 'unknown') {
   if (!res.headersSent) {
             res.setHeader('X-Ghost-Reason', reason);
-    if (process.env.FAIL_OPEN_REDIRECT === 'true' && res.locals?.failOpenUrl && !['missing_url', 'invalid_url', 'ssrf_blocked'].includes(reason)) { res.setHeader('X-Fail-Open', reason); res.setHeader('Cache-Control', 'no-store'); return res.redirect(302, res.locals.failOpenUrl); }
+    // Redirecting the client to the original image is intentionally disabled: it would download uncompressed images.
         if (['download_budget_exceeded', 'byte_budget_exceeded', 'body_too_large', 'upstream_timeout', 'proxy_error', 'decompress_failed', 'corrupt_image'].includes(reason)) cacheSeconds = 0;
     const accept = String(hint?.accept || '');
     const body = hint?.body;
@@ -280,7 +280,7 @@ function toBuffer(value) {
 }
 
 function bypass(req, res, rawBody, statusCode = 200) {
-  if (!res.headersSent) res.status(statusCode);
+  if (!res.headersSent) res.status(statusCode === 304 ? 200 : statusCode);
   res.end(rawBody);
 }
 
@@ -670,7 +670,7 @@ export default async function proxy(req, res) {
     ...(autoReferer ? { referer: autoReferer } : {})
   };
 
-  const cacheKey = redactUrlForCache(targetUrl);
+  const cacheKey = createHash('sha256').update(targetUrl).digest('hex');
   const vaultEntry = vaultGet(cacheKey);
   if (vaultEntry) {
     if (vaultEntry.etag) headers['if-none-match'] = vaultEntry.etag;
@@ -802,7 +802,11 @@ try {
   reservedBodyBytes = rawBody.length;
   }
     
-    if (statusCode === 200 && rawBody.length <= RAW_VAULT_MAX_ENTRY) {
+    if (
+      statusCode === 200 &&
+      rawBody.length <= RAW_VAULT_MAX_ENTRY &&
+      !/no-store|private/i.test(String(responseHeaders['cache-control'] || ''))
+    ) {
       const upstreamEtag = responseHeaders['etag'] || null;
       const upstreamLastModified = responseHeaders['last-modified'] || null;
       if (upstreamEtag || upstreamLastModified) {
@@ -897,7 +901,7 @@ return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'not_
     res.setHeader('Content-Type', detectedType);
     res.setHeader('x-upstream-content-length', String(rawBody.length));
     res.setHeader('ETag', etag);
-    res.setHeader('Vary', 'Accept, Accept-Encoding, Sec-CH-Save-Data');
+    res.setHeader('Vary', 'Accept, Accept-Encoding, Save-Data, Sec-CH-Save-Data, X-API-Key, Authorization, X-Vercel-Service-Key');
 
     if (isNoStore) {
       res.setHeader('Cache-Control', 'no-store');
@@ -918,7 +922,7 @@ return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'not_
       (requestedFormat === 'avif' && detectedType === 'image/avif');
 
     const isModernFormat = detectedType === 'image/webp' || detectedType === 'image/avif';
-        const bypassKb = Number.parseInt(process.env.BYPASS_SMALL_MODERN_KB ?? '150', 10);
+        const bypassKb = Number.parseInt(process.env.BYPASS_SMALL_MODERN_KB ?? '0', 10);
     const isSmallFile = Number.isFinite(bypassKb) && rawBody.length < bypassKb * 1024;
 
     if (isModernFormat && isSmallFile && formatMatchesDetected) {
@@ -935,6 +939,8 @@ return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'not_
       // Force-AVIF: if it's a valid image but rejected due to memory budget, return 503
       if (isImageType && !isExcludedType) {
         res.setHeader('Retry-After', '5');
+        res.setHeader('Cache-Control', 'no-store');
+        res.removeHeader('ETag');
         res.setHeader('X-Force-AVIF', 'MEMORY_BUDGET_EXCEEDED');
         return res.status(503).json({ error: 'Memory budget exceeded. Try again shortly.' });
       }
