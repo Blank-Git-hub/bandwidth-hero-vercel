@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import pino from 'pino';
+import ipaddr from 'ipaddr.js';
 import rateLimiter from './rateLimiter.js';
 
 const logger = pino({
@@ -24,7 +25,7 @@ const AUTH_FAILURE_MAX = parseInt(process.env.RATE_LIMIT_MAX_AUTH_FAILURES, 10) 
 const AUTH_RATE_LIMIT_SCOPE = 'auth-fail';
 
 const REQ_RATE_LIMIT_WINDOW_MS = parseInt(process.env.REQ_RATE_LIMIT_WINDOW_MS, 10) || 60000;
-const REQ_RATE_LIMIT_MAX = parseInt(process.env.REQ_RATE_LIMIT_MAX, 10) || 120;
+const REQ_RATE_LIMIT_MAX = parseInt(process.env.REQ_RATE_LIMIT_MAX, 10) || 1200;
 const REQ_RATE_LIMIT_SCOPE = 'req-success';
 
 // --- ITEM 3: Per-Key Rate Limiting Config ---
@@ -45,6 +46,19 @@ const SERVICE_KEY_RATE_LIMIT_MAX =
 Number.isFinite(parsedServiceKeyMax) && parsedServiceKeyMax > 0
 ? parsedServiceKeyMax
 : REQ_RATE_LIMIT_MAX * 100;
+
+// Rate-limit bucket: IPv4 as-is; IPv6 collapsed to its /64 so one host cannot rotate addresses to dodge limits.
+function clientBucket(ip) {
+  try {
+    const addr = ipaddr.process(String(ip));
+    if (addr.kind() === 'ipv6') {
+      return addr.toNormalizedString().split(':').slice(0, 4).join(':') + '::/64';
+    }
+    return addr.toString();
+  } catch {
+    return String(ip);
+  }
+}
 
 function credentialIdentity(label, secret) {
   if (!secret || typeof secret !== 'string') return null;
@@ -178,7 +192,7 @@ export default async function authenticate(req, res, next) {
 
   // F6: Rate limit auth failures by IP to prevent bucket-churning via rotating fake keys.
   const clientIp = req.ip || req.socket?.remoteAddress || 'unknown';
-  const clientKey = `ip:${clientIp}`;
+  const clientKey = `ip:${clientBucket(clientIp)}`;
 
     // 0. Detect Internal Service Key (from Cloudflare Worker - F10 FIX)
   const serviceKey = req.headers['x-vercel-service-key'];
