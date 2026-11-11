@@ -202,7 +202,7 @@ export default async function authenticate(req, res, next) {
   // Service calls arrive from the worker's shared egress IP and are limited per credential below,
   // so the per-IP success limiter is skipped for them.
   const [authLimited, reqLimited] = await Promise.all([
-    isAuthRateLimited(clientKey),
+    isServiceCall ? Promise.resolve(false) : isAuthRateLimited(clientKey),
     isServiceCall ? Promise.resolve(false) : isRequestRateLimited(clientKey)
   ]);
 
