@@ -243,7 +243,7 @@ function sendGhost(res, cacheSeconds = 3600, hint = null, reason = 'unknown') {
   if (!res.headersSent) {
             res.setHeader('X-Ghost-Reason', reason);
     // Redirecting the client to the original image is intentionally disabled: it would download uncompressed images.
-        if (['download_budget_exceeded', 'byte_budget_exceeded', 'body_too_large', 'upstream_timeout', 'proxy_error', 'decompress_failed', 'corrupt_image'].includes(reason)) cacheSeconds = 0;
+        if (['download_budget_exceeded', 'byte_budget_exceeded', 'body_too_large', 'upstream_timeout', 'proxy_error', 'decompress_failed', 'corrupt_image', 'not_an_image'].includes(reason)) cacheSeconds = 0;
     const accept = String(hint?.accept || '');
     const body = hint?.body;
 
@@ -553,8 +553,8 @@ const RETRYABLE_CODES = new Set([
 
 const RETRYABLE_STATUSES = new Set([408, 500, 502, 503, 504, 429, 520, 521, 522, 523, 524]);
 
-async function fetchWithBackoff(url, headers, signal) {
-  const totalDeadline = Date.now() + UPSTREAM_TOTAL_DEADLINE_MS;
+async function fetchWithBackoff(url, headers, signal, deadlineAt = Date.now() + UPSTREAM_TOTAL_DEADLINE_MS) {
+  const totalDeadline = deadlineAt;
   let lastError = null;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -601,6 +601,7 @@ async function fetchWithBackoff(url, headers, signal) {
 export default async function proxy(req, res) {
   const startTime = Date.now();
   req.proxyStartedAt = startTime;
+  const upstreamDeadlineAt = startTime + UPSTREAM_TOTAL_DEADLINE_MS;
   const reqId = req.id || 'unknown';
   const log = req.log || console;
 
@@ -702,7 +703,7 @@ export default async function proxy(req, res) {
   let activeHeaders = fetchHeaders;
 
   try {
-    response = await fetchWithBackoff(activeUrl, activeHeaders, req?.signal);
+    response = await fetchWithBackoff(activeUrl, activeHeaders, req?.signal, upstreamDeadlineAt);
     statusCode = response.statusCode;
     responseHeaders = response.headers;
 
@@ -718,7 +719,7 @@ export default async function proxy(req, res) {
       activeHeaders = headers;
 
       try {
-        response = await fetchWithBackoff(activeUrl, activeHeaders, req?.signal);
+        response = await fetchWithBackoff(activeUrl, activeHeaders, req?.signal, upstreamDeadlineAt);
         statusCode = response.statusCode;
         responseHeaders = response.headers;
       } catch (fallbackErr) {
@@ -742,7 +743,7 @@ export default async function proxy(req, res) {
     };
 
     try {
-      response = await fetchWithBackoff(activeUrl, retryHeaders, req.signal);
+      response = await fetchWithBackoff(activeUrl, retryHeaders, req.signal, upstreamDeadlineAt);
       statusCode = response.statusCode;
       responseHeaders = response.headers;
     } catch (err) {
@@ -754,7 +755,7 @@ export default async function proxy(req, res) {
   // Some hosts reject header sets that contradict the client's UA.
   if (statusCode === 401 || statusCode === 403 || statusCode === 404) {
     try {
-      const nativeResponse = await fetchWithBackoff(targetUrl, { 'user-agent': userAgent || getRandomUA(), 'accept-encoding': UPSTREAM_ACCEPT_ENCODING }, req.signal);
+      const nativeResponse = await fetchWithBackoff(targetUrl, { 'user-agent': userAgent || getRandomUA(), 'accept-encoding': UPSTREAM_ACCEPT_ENCODING }, req.signal, upstreamDeadlineAt);
       if (nativeResponse.statusCode < 400) {
         log.info({ event: 'NATIVE_FETCH_OK', reqId, status: nativeResponse.statusCode }, '[NATIVE] App-style fetch succeeded after browser-style attempts failed');
         response = nativeResponse;
@@ -976,7 +977,7 @@ return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'not_
               'cache-control': 'no-cache'
             };
 
-            const retryResponse = await fetchWithBackoff(activeUrl, retryHeaders, req.signal);
+            const retryResponse = await fetchWithBackoff(activeUrl, retryHeaders, req.signal, upstreamDeadlineAt);
             const retryBody = toBuffer(retryResponse.body);
 
             if (retryBody.length < 100) continue;
