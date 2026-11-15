@@ -1601,7 +1601,7 @@ eventLoopLag = await measureEventLoopLag();
        // Deskew — only for grayscale/scanned document content.
    // Photos, anime, and colorful content produce false positives.
    let skewAngle = 0;
-   if (ENABLE_DESKEW && allowEnhancements && analysis.isGrayscale && !isMangaMode && !isStripMode && !analysis.isMangaStrip && !analysis.isMangaPage && !analysis.isMangaWidePage) {
+   if (ENABLE_DESKEW && allowEnhancements && analysis.isGrayscale && !isMangaMode && !isStripMode && !analysis.isMangaStrip && !analysis.isMangaPage && !analysis.isMangaWidePage && !req.opts?.rotate) {
      phaseStart = Date.now();
      skewAngle = await detectSkew(buffer);
      watchdog.skew = Date.now() - phaseStart;
@@ -1794,11 +1794,8 @@ limitInputPixels: sharpPixelLimit
 
       // FEATURE: HDR/wide-gamut safe downconversion
       if (needsHDRConversion) {
-        if (hdrInfo.isPotentialHDR) {
-          // Approximate HDR to SDR tone mapping via gamma
-          pipeline = pipeline.gamma(1.0 / 2.2);
-          res.setHeader('X-HDR-ToneMap', 'GAMMA_2.2');
-        }
+        // sharp's gamma() only accepts 1.0-3.0, so the former gamma(1/2.2) tone-map threw and failed the request.
+        // 16-bit/ICC sources are converted to 8-bit sRGB by toColourspace('srgb') above.
         // Wide gamut is handled by toColourspace('srgb') above
         res.setHeader('X-HDR-Source-Space', hdrInfo.space);
       }
