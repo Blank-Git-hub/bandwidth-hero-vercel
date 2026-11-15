@@ -1,4 +1,9 @@
 {
+  "git": {
+    "deploymentEnabled": {
+      "upstream-sync-*": false
+    }
+  },
   "rewrites": [
     {
       "source": "/(.*)",
