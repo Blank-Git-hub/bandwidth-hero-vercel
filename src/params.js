@@ -196,11 +196,8 @@ function recoverUnencodedUrl(req) {
     value = value.slice(0, amp);
   }
 
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
+  // The tail was sent unencoded, so it already IS the literal URL; decoding would turn %2F, %23, %26, %2B into different characters.
+  return value;
 }
 
 function extractHiddenUrlFromRaw(req) {
