@@ -176,6 +176,34 @@ function safeCompare(a, b) {
   return crypto.timingSafeEqual(hashA, hashB);
 }
 
+// True when the request carries a correct credential. A locked-out IP may still use a correct key:
+// the failure limiter exists to slow guessing, not to lock out the real owner (e.g. behind a shared carrier IP).
+function hasValidCredential(req) {
+  const headerKey = req.headers['x-api-key'];
+  if (API_KEY && headerKey && safeCompare(headerKey, API_KEY)) return true;
+
+  if (ALLOW_QUERY_API_KEY && API_KEY) {
+    let queryKey = req.query.api || req.query.apikey || req.query.api_key;
+    if (typeof queryKey === 'string') {
+      queryKey = queryKey.split(/[\/\?]/)[0].trim();
+    }
+    if (queryKey && safeCompare(String(queryKey), API_KEY)) return true;
+  }
+
+  if (LOGIN && PASSWORD) {
+    const credentials = parseBasicAuth(req);
+    if (
+      credentials &&
+      safeCompare(credentials.name, LOGIN) &&
+      safeCompare(credentials.pass, PASSWORD)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export default async function authenticate(req, res, next) {
   if (!LOGIN && !PASSWORD && !API_KEY && !VERCEL_SERVICE_KEY) {
     const log = req.log || logger;
@@ -206,7 +234,7 @@ export default async function authenticate(req, res, next) {
     isServiceCall ? Promise.resolve(false) : isRequestRateLimited(clientKey)
   ]);
 
-  if (authLimited) {
+  if (authLimited && !hasValidCredential(req)) {
     return res.status(429).json({ error: 'Too many authentication failures. Try again later.' });
   }
 
