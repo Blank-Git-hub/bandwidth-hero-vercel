@@ -568,6 +568,7 @@ async function detectSkew(buffer) {
     // lines align into distinct rows.
     let bestAngle = 0;
     let bestVariance = 0;
+    const variances = [];
 
     for (let testAngle = -4; testAngle <= 4; testAngle += 0.5) {
       const rad = (testAngle * Math.PI) / 180;
@@ -595,6 +596,7 @@ async function detectSkew(buffer) {
       const mean = projection.reduce((a, b) => a + b, 0) / h;
       const variance = projection.reduce((s, v) => s + (v - mean) ** 2, 0) / h;
 
+      variances.push(variance);
       if (variance > bestVariance) {
         bestVariance = variance;
         bestAngle = testAngle;
@@ -603,6 +605,13 @@ async function detectSkew(buffer) {
 
     // Reject if the detected angle is too small to matter
     if (Math.abs(bestAngle) < 0.5) return 0;
+
+    // Reject if there is no real peak: a genuine skew shows a variance maximum strictly inside the search range
+    // (higher than both neighbours). A best angle on the range edge, or on a plateau, means the image has no
+    // dominant line structure, so rotating it would be a guess.
+    const bestIndex = Math.round((bestAngle + 4) / 0.5);
+    if (bestIndex <= 0 || bestIndex >= variances.length - 1) return 0;
+    if (!(variances[bestIndex] > variances[bestIndex - 1] && variances[bestIndex] > variances[bestIndex + 1])) return 0;
 
     return bestAngle;
   } catch {
@@ -1837,9 +1846,9 @@ limitInputPixels: sharpPixelLimit
         }
       }
 
-      // Deskew rotation (negative angle corrects the detected tilt)
+      // Deskew rotation (detectSkew returns the rotation that straightens the page)
       if (ENABLE_DESKEW && allowEnhancements && !isMangaMode && skewAngle !== 0) {
-        pipeline = pipeline.rotate(-skewAngle, {
+        pipeline = pipeline.rotate(skewAngle, {
           background: analysis.isGrayscale
             ? { r: 255, g: 255, b: 255 }
             : { r: 255, g: 255, b: 255, alpha: 0 },
