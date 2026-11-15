@@ -51,4 +51,4 @@ jobs:
             --title "Sync upstream changes" \
             --body "Upstream finally woke up. Review carefully for security conflicts before merging." \
             --base main \
-            --head "$SYNC_BRANCH" || true
+            --head "$SYNC_BRANCH"

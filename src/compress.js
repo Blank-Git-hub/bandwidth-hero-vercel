@@ -4,6 +4,7 @@ import { LRUCache } from 'lru-cache';
 import memoryGovernor from './memoryGovernor.js';
 import concurrencyGovernor from './concurrencyGovernor.js';
 import adaptiveDirector from './adaptiveDirector.js';
+import inflight from './inflight.js';
 
 const subtle = webcrypto?.subtle ?? globalThis.crypto?.subtle;
 
@@ -231,7 +232,7 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 // RESOURCE WATCHDOG:
 // If the instance is idle and /tmp or RSS is exhausted, recycle cleanly.
 setInterval(async () => {
-  if (isShuttingDown || activeRequests > 0 || activeEncodes > 0) return;
+  if (isShuttingDown || activeRequests > 0 || activeEncodes > 0 || inflight.current() > 0) return;
 
   // Best-effort cleanup of stale libvips temp files.
   try {
@@ -301,7 +302,7 @@ const FORCE_GRAYSCALE = envBool('FORCE_GRAYSCALE', false);
 const STRIP_ALPHA = envBool('STRIP_ALPHA', true);
 const ENABLE_PLACEHOLDER = envBool('ENABLE_PLACEHOLDER', true);
 const ENABLE_PALETTE = envBool('ENABLE_PALETTE', true);
-const ENABLE_VOID_WATCHER = envBool('ENABLE_VOID_WATCHER', true);
+const ENABLE_VOID_WATCHER = envBool('ENABLE_VOID_WATCHER', false);
 const ENABLE_JUDGE = envBool('ENABLE_JUDGE', true);
 const ENABLE_MOIRE = envBool('ENABLE_MOIRE', true);
 const ENABLE_LINE_DENOISE = envBool('ENABLE_LINE_DENOISE', true);
@@ -1309,7 +1310,7 @@ const bytesPerChannel =
 const bytesPerPixel = Math.max(3, metadataChannels * bytesPerChannel);
 const pixelWeight = Math.max(1, bytesPerPixel / 6);
 
-totalPixelCost = Math.ceil(width * height * frames * pixelWeight);
+totalPixelCost = Math.ceil(Math.max(width * height, (metadata.width || 0) * (metadata.height || 0)) * frames * pixelWeight);
 
     const formatDecision = chooseOutputFormat(metadata, totalPixelCost, req.opts?.format);
     const outputFormat = formatDecision.format;
@@ -1483,7 +1484,7 @@ if (canNativeAnimate) {
       watchdog.palette = Date.now() - phaseStart;
       if (ENABLE_VOID_WATCHER && thumbResult.isVoid) {
         res.setHeader('X-Void', 'TRUE');
-        res.setHeader('Content-Type', `image/${format}`);
+        res.setHeader('Content-Type', req.opts?.originType || `image/${format}`);
         if (ENABLE_ORACLE_LEDGER) {
           metrics.voidDetections++;
           metrics.totalBytesOut += buffer.length;
@@ -1614,6 +1615,13 @@ eventLoopLag = await measureEventLoopLag();
         res.setHeader('X-Timeout-Guillotine', 'ABORTED');
         res.status(499);
         return Buffer.alloc(0);
+      }
+
+      // Alpha-trim coordinates are computed on the UNROTATED image; any later rotation invalidates them.
+      if (alphaBounds && (req.opts?.rotate || metadata.orientation > 1 || skewAngle !== 0)) {
+        alphaBounds = null;
+        res.removeHeader('X-Alpha-Trim');
+        res.removeHeader('X-Alpha-Trim-Pad');
       }
 
       // Judge quality — skip for animated content (GIF / animated WebP).
@@ -2080,7 +2088,9 @@ kernel: sharp.kernel.lanczos3,
       }
 
       // Banding exorcist
-      if (bandingExorcistActive) {
+            const ditherW = targetWidth || (targetHeight ? Math.round(baseW * (targetHeight / baseH)) : baseW);
+      const ditherH = targetHeight || (targetWidth ? Math.round(baseH * (targetWidth / baseW)) : baseH);
+      if (bandingExorcistActive && ditherW >= 128 && ditherH >= 128) {
         const noiseTile = await getNoiseTile();
         pipeline = pipeline.composite([{ input: noiseTile, tile: true, blend: 'over' }]);
         res.setHeader('X-Banding-Exorcist', 'ACTIVE');
@@ -2398,9 +2408,9 @@ res.status(502);
       }
 
       // If compressed is larger than original, return original
-      if (outputBuffer.length >= buffer.length) {
+      if (outputBuffer.length >= buffer.length && !(metadata.exif && ENABLE_METADATA_REAPER && outputBuffer.length <= buffer.length * 1.1)) {
         res.setHeader('X-Compression', 'SKIPPED');
-        res.setHeader('Content-Type', `image/${format}`);
+        res.setHeader('Content-Type', req.opts?.originType || `image/${format}`);
         if (placeholder) res.setHeader('X-Placeholder', placeholder);
         if (judgeResult) res.setHeader('X-Quality-Grade', judgeResult.grade);
         if (palette.length > 0) res.setHeader('X-Palette', palette.join(','));
@@ -2424,7 +2434,9 @@ res.status(502);
         grade: judgeResult ? judgeResult.grade : null,
         palette,
       };
-      if (exactKey) exactCache.set(exactKey, cacheEntry);
+      if (exactKey && !cpuPressure && watchdogScaleFactor === 1 && finalRisk !== 'budget_exceeded') {
+        exactCache.set(exactKey, cacheEntry);
+      }
 
       res.setHeader('X-Perceptual-Cache', 'REMOVED');
       res.setHeader('X-Encode-Quality', String(quality));
@@ -2593,6 +2605,10 @@ res.status(502);
 
     const safeMessage = err?.message ? String(err.message).split('?')[0] : 'Unknown compress error';
     const tmpFreeMB = await getTmpFreeMB();
+        // Corrupt/truncated input: let the proxy re-fetch and retry instead of failing here.
+    if (/corrupt|premature end|invalid image/i.test(safeMessage) && !res.headersSent && !res.writableEnded) {
+      throw err;
+    }
 
     log.error({
       reqId,
@@ -2640,10 +2656,10 @@ res.status(502);
     // gracefully exit to force Vercel to spin up a fresh instance.
     // This prevents the OS OOM-killer from severing active TCP sockets.
         const currentRssMB = memGov.getRssMB();
-    if (activeRequests === 0 && currentRssMB >= memoryGovernor.RSS_ADMISSION_MB) {
+    if (activeRequests === 0 && inflight.current() <= 1 && currentRssMB >= memoryGovernor.RSS_ADMISSION_MB) {
       log.warn({ event: 'SELF_RECYCLE', rssMB: currentRssMB, admissionMB: memoryGovernor.RSS_ADMISSION_MB }, '[SELF-RECYCLE] RSS at admission ceiling with empty queue, recycling after response flush');
       const recycle = () => setTimeout(() => {
-        if (activeRequests === 0) process.exit(0);
+        if (activeRequests === 0 && inflight.current() === 0) process.exit(0);
       }, 250).unref();
       if (res.writableEnded || res.destroyed) recycle();
       else res.once('close', recycle);

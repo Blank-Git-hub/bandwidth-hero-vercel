@@ -19,6 +19,7 @@ import proxy from './src/proxy.js';
 import { getMetrics, checkHealth } from './src/compress.js';
 import memoryGovernor from './src/memoryGovernor.js';
 import adaptiveDirector from './src/adaptiveDirector.js';
+import inflight from './src/inflight.js';
 
 const brotliCompressAsync = promisify(brotliCompress);
 
@@ -50,6 +51,11 @@ const reqId = typeof rawReqId === 'string' && /^[A-Za-z0-9._:-]{1,64}$/.test(raw
   : crypto.randomUUID();
 req.id = reqId;
 res.setHeader('X-Request-ID', reqId);
+inflight.enter();
+let inflightLeft = false;
+const inflightLeave = () => { if (!inflightLeft) { inflightLeft = true; inflight.leave(); } };
+res.on('close', inflightLeave);
+res.on('finish', inflightLeave);
 const ac = new AbortController();
 try {
   Object.defineProperty(req, 'signal', {
@@ -84,8 +90,18 @@ app.use(
 
         url = url.replace(
           /([?&])(api|apikey|api_key|token|access_token|sig|signature|session|auth|secret|key|password)=([^&]*)/gi,
-          '$1$2=[REDACTED]'
+                    '$1$2=[REDACTED]'
         );
+
+        if (process.env.LOG_FULL_URL !== 'true') {
+          url = url.replace(/([?&]url=)([^&]*)/i, (_m, prefix, value) => {
+            try {
+              return prefix + encodeURIComponent(new URL(decodeURIComponent(value)).origin + '/*');
+            } catch {
+              return prefix + '[REDACTED]';
+            }
+          });
+        }
 
         return {
           id: req.id,

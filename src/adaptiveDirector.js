@@ -159,6 +159,7 @@ export function getEffortLimitByMp({
 
   if (format === 'avif') {
     if (mp <= 1) return 6;
+    if (mp <= 2) return 5;
     if (mp <= 3) return 4;
     if (mp <= 6) return 3;
     if (mp <= 10) return 3;
@@ -467,8 +468,10 @@ export function recordEncode({
     entry.timeouts++;
   }
 
-  if (!success) {
+    if (!success) {
     entry.failures++;
+  } else if (!timedOut && entry.failures > 0) {
+    entry.failures--;
   }
 
   if (Number.isFinite(encodeMs) && encodeMs > 0) {
@@ -525,7 +528,7 @@ export function recordRejection({
     failures: 0
   };
 
-  entry.failures = Math.min(1000, entry.failures + 1);
+    entry.rejections = Math.min(1000, (entry.rejections || 0) + 1);
 
   stats.set(key, entry);
 }

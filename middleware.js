@@ -32,8 +32,7 @@ export default function middleware(request) {
   if (url.pathname === '/badge' || url.pathname === '/info') {
     return new Response(JSON.stringify({
       proxy: 'bandwidth-hero',
-      version: '2.0',
-      timestamp: Date.now()
+      version: '2.0'
     }), {
       status: 200,
       headers: {

@@ -5,6 +5,19 @@ import { LRUCache } from 'lru-cache';
 
 const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
 
+// Ports that are never legitimate image hosts: services browsers refuse to speak HTTP to
+// (Fetch "bad ports") plus common databases/admin services. Normal and custom web ports stay allowed.
+const BLOCKED_PORTS = new Set(
+  [
+    1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95,
+    101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161,
+    179, 389, 427, 445, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556,
+    563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 2375, 2376, 3306,
+    3389, 3659, 4045, 4190, 5060, 5061, 5432, 5900, 6000, 6379, 6566, 6665, 6666, 6667,
+    6668, 6669, 6679, 6697, 9200, 10080, 11211, 27017
+  ].map(String)
+);
+
 const BLOCKED_HOSTS = new Set([
   'localhost',
   '0.0.0.0',
@@ -103,8 +116,11 @@ export function isPublicIP(ip) {
       addr = addr.toIPv4Address();
     }
 
-    if (addr.kind() === 'ipv6') {
+        if (addr.kind() === 'ipv6') {
       const lower = addr.toString().toLowerCase();
+
+      // IPv4-compatible ::/96 (deprecated; e.g. ::7f00:1, ::a00:1)
+      if (addr.match(ipaddr.parse('::'), 96)) return false;
 
       // Teredo 2001::/32
       const teredoNetwork = ipaddr.parse('2001:0000::');
@@ -176,6 +192,7 @@ export function parseSafeUrl(input) {
 
   if (!ALLOWED_PROTOCOLS.has(url.protocol)) return null;
   if (url.username || url.password) return null;
+  if (url.port && BLOCKED_PORTS.has(url.port)) return null;
 
   const host = normalizeHost(url.hostname);
 

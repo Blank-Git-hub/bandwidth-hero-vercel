@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import pino from 'pino';
+import ipaddr from 'ipaddr.js';
 import rateLimiter from './rateLimiter.js';
 
 const logger = pino({
@@ -24,7 +25,7 @@ const AUTH_FAILURE_MAX = parseInt(process.env.RATE_LIMIT_MAX_AUTH_FAILURES, 10) 
 const AUTH_RATE_LIMIT_SCOPE = 'auth-fail';
 
 const REQ_RATE_LIMIT_WINDOW_MS = parseInt(process.env.REQ_RATE_LIMIT_WINDOW_MS, 10) || 60000;
-const REQ_RATE_LIMIT_MAX = parseInt(process.env.REQ_RATE_LIMIT_MAX, 10) || 120;
+const REQ_RATE_LIMIT_MAX = parseInt(process.env.REQ_RATE_LIMIT_MAX, 10) || 1200;
 const REQ_RATE_LIMIT_SCOPE = 'req-success';
 
 // --- ITEM 3: Per-Key Rate Limiting Config ---
@@ -45,6 +46,19 @@ const SERVICE_KEY_RATE_LIMIT_MAX =
 Number.isFinite(parsedServiceKeyMax) && parsedServiceKeyMax > 0
 ? parsedServiceKeyMax
 : REQ_RATE_LIMIT_MAX * 100;
+
+// Rate-limit bucket: IPv4 as-is; IPv6 collapsed to its /64 so one host cannot rotate addresses to dodge limits.
+function clientBucket(ip) {
+  try {
+    const addr = ipaddr.process(String(ip));
+    if (addr.kind() === 'ipv6') {
+      return addr.toNormalizedString().split(':').slice(0, 4).join(':') + '::/64';
+    }
+    return addr.toString();
+  } catch {
+    return String(ip);
+  }
+}
 
 function credentialIdentity(label, secret) {
   if (!secret || typeof secret !== 'string') return null;
@@ -78,12 +92,20 @@ async function allowKeyRequest(identity, max) {
 // -------------------------------------------
 
 async function recordSuccessfulRequest(key) {
-  await rateLimiter.increment({
-    scope: REQ_RATE_LIMIT_SCOPE,
-    key,
-    windowMs: REQ_RATE_LIMIT_WINDOW_MS,
-    max: REQ_RATE_LIMIT_MAX
-  }).catch(() => {});
+  // Success increment and auth-failure reset run concurrently (one round-trip, not two).
+  await Promise.all([
+    rateLimiter.increment({
+      scope: REQ_RATE_LIMIT_SCOPE,
+      key,
+      windowMs: REQ_RATE_LIMIT_WINDOW_MS,
+      max: REQ_RATE_LIMIT_MAX
+    }).catch(() => {}),
+    rateLimiter.reset({
+      scope: AUTH_RATE_LIMIT_SCOPE,
+      key,
+      windowMs: AUTH_FAILURE_WINDOW_MS
+    }).catch(() => {})
+  ]);
 }
 
 async function isRequestRateLimited(key) {
@@ -122,12 +144,8 @@ async function isAuthRateLimited(key) {
   }
 }
 
-async function clearAuthFailure(key) {
-  await rateLimiter.reset({
-    scope: AUTH_RATE_LIMIT_SCOPE,
-    key,
-    windowMs: AUTH_FAILURE_WINDOW_MS
-  }).catch(() => {});
+async function clearAuthFailure(_key) {
+  // Intentionally a no-op: the reset now runs inside recordSuccessfulRequest() so both calls are concurrent.
 }
 
 function parseBasicAuth(req) {
@@ -174,22 +192,30 @@ export default async function authenticate(req, res, next) {
 
   // F6: Rate limit auth failures by IP to prevent bucket-churning via rotating fake keys.
   const clientIp = req.ip || req.socket?.remoteAddress || 'unknown';
-  const clientKey = `ip:${clientIp}`;
+  const clientKey = `ip:${clientBucket(clientIp)}`;
 
-  // F6: Rate limit auth failures
-  if (await isAuthRateLimited(clientKey)) {
+    // 0. Detect Internal Service Key (from Cloudflare Worker - F10 FIX)
+  const serviceKey = req.headers['x-vercel-service-key'];
+  const isServiceCall = Boolean(VERCEL_SERVICE_KEY && serviceKey && safeCompare(serviceKey, VERCEL_SERVICE_KEY));
+
+  // F6 + Item 9: peek both limiters in parallel (one round-trip instead of two).
+  // Service calls arrive from the worker's shared egress IP and are limited per credential below,
+  // so the per-IP success limiter is skipped for them.
+  const [authLimited, reqLimited] = await Promise.all([
+    isServiceCall ? Promise.resolve(false) : isAuthRateLimited(clientKey),
+    isServiceCall ? Promise.resolve(false) : isRequestRateLimited(clientKey)
+  ]);
+
+  if (authLimited) {
     return res.status(429).json({ error: 'Too many authentication failures. Try again later.' });
   }
 
-  // Item 9: Rate limit successful requests per IP
-  if (await isRequestRateLimited(clientKey)) {
+  if (reqLimited) {
     res.setHeader('Retry-After', String(Math.ceil(REQ_RATE_LIMIT_WINDOW_MS / 1000)));
     return res.status(429).json({ error: 'Too many requests. Try again later.' });
   }
 
-  // 0. Check Internal Service Key (from Cloudflare Worker - F10 FIX)
-  const serviceKey = req.headers['x-vercel-service-key'];
-  if (VERCEL_SERVICE_KEY && serviceKey && safeCompare(serviceKey, VERCEL_SERVICE_KEY)) {
+  if (isServiceCall) {
 req.authVia = 'service';
 const serviceIdentity = credentialIdentity('svc', VERCEL_SERVICE_KEY);
 
