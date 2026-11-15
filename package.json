@@ -7,7 +7,7 @@
   "author": "Anatoliy Yastreb",
   "license": "MIT",
   "engines": {
-    "node": "26.x"
+    "node": ">=24.0.0"
   },
   "scripts": {
     "start": "node server.js",
