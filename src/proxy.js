@@ -242,6 +242,14 @@ function extractGhostDims(buffer) {
 function sendGhost(res, cacheSeconds = 3600, hint = null, reason = 'unknown') {
   if (!res.headersSent) {
             res.setHeader('X-Ghost-Reason', reason);
+    // Transient failures: answer with a real error status so clients retry instead of saving a blank 1x1 page.
+    const TRANSIENT_STATUS = { upstream_timeout: 504, byte_budget_exceeded: 503, proxy_error: 502 };
+    const transientStatus = TRANSIENT_STATUS[reason] || (reason === 'upstream_error_429' ? 503 : /^upstream_error_5\d\d$/.test(reason) ? 502 : 0);
+    if (transientStatus) {
+      res.setHeader('Retry-After', '5');
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(transientStatus).json({ error: 'Temporary upstream failure', reason });
+    }
     // Redirecting the client to the original image is intentionally disabled: it would download uncompressed images.
         if (['download_budget_exceeded', 'byte_budget_exceeded', 'body_too_large', 'upstream_timeout', 'proxy_error', 'decompress_failed', 'corrupt_image', 'not_an_image'].includes(reason)) cacheSeconds = 0;
     const accept = String(hint?.accept || '');
@@ -610,7 +618,7 @@ export default async function proxy(req, res) {
     return res.status(503).json({ error: 'Memory pressure. Try again shortly.' });
   }
 
-  let targetUrl = req.opts?.url || req.query?.url;
+  let targetUrl = req.opts?.url; // only the URL already vetted by params.js/parseSafeUrl; never fall back to raw query input
 
   if (Array.isArray(targetUrl)) {
     targetUrl = targetUrl.find(u => u && typeof u === 'string') || String(targetUrl[0]);
