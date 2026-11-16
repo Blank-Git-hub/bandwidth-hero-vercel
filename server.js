@@ -80,10 +80,22 @@ const logger = pino({
   timestamp: pino.stdTimeFunctions.isoTime
 });
 
+// Instance start marker: lets you line up cold starts and recycles with slow or stuck periods.
+logger.info({
+  event: 'INSTANCE_START',
+  node: process.version,
+  onVercel: Boolean(process.env.VERCEL),
+  memoryCeilingMB: memoryGovernor.MEMORY_CEILING_MB,
+  rssMB: memoryGovernor.getRssMB()
+}, '[INSTANCE START]');
+
 app.use(
   pinoHttp({
     logger,
     customProps: (req) => ({ reqId: req.id }),
+    // Instance snapshot on every access-log line (inflight = other requests running at completion).
+    customSuccessObject: (req, res, val) => ({ ...val, rssMB: memoryGovernor.getRssMB(), inflight: inflight.current(), uptimeSec: Math.floor(process.uptime()) }),
+    customErrorObject: (req, res, err, val) => ({ ...val, rssMB: memoryGovernor.getRssMB(), inflight: inflight.current(), uptimeSec: Math.floor(process.uptime()) }),
     serializers: {
       req(req) {
         let url = req.url || '';
