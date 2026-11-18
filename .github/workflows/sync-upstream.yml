@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write
 
 jobs:
   sync:
@@ -60,3 +61,8 @@ jobs:
             --body "Upstream finally woke up. Review carefully for security conflicts before merging." \
             --base main \
             --head "$SYNC_BRANCH"
+
+          # PRs opened with GITHUB_TOKEN do not start the Tests workflow by themselves, so start it on the sync branch explicitly.
+          gh workflow run test.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$SYNC_BRANCH"
