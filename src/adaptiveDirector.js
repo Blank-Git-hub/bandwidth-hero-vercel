@@ -38,27 +38,27 @@ const EFFORT_CEILINGS = {
 
 // Real-world libaom exponential scaling
 const AVIF_EFFORT_FACTOR = [
-  0.30, // 0
-  0.40, // 1
+  0.3, // 0
+  0.4, // 1
   0.55, // 2
   0.75, // 3
-  1.00, // 4 baseline
-  1.60, // 5
-  2.80, // 6
-  5.00, // 7
-  9.00, // 8
-  16.00 // 9
+  1.0, // 4 baseline
+  1.6, // 5
+  2.8, // 6
+  5.0, // 7
+  9.0, // 8
+  16.0 // 9
 ];
 
 // Real-world libwebp scaling
 const WEBP_EFFORT_FACTOR = [
-  0.40, // 0
+  0.4, // 0
   0.55, // 1
-  0.70, // 2
+  0.7, // 2
   0.85, // 3
-  1.00, // 4 baseline
-  1.50, // 5
-  2.50  // 6
+  1.0, // 4 baseline
+  1.5, // 5
+  2.5 // 6
 ];
 
 // Decode cost multipliers (relative to JPEG)
@@ -82,13 +82,13 @@ const DEFAULT_MS_PER_MP = {
     animated: 1300
   },
   webp: {
-tiny: 100,
-normal: 180,
-portrait: 200,
-strip: 320,
-extreme_strip: 480,
-animated: 300
-},
+    tiny: 100,
+    normal: 180,
+    portrait: 200,
+    strip: 320,
+    extreme_strip: 480,
+    animated: 300
+  },
   jpeg: {
     tiny: 80,
     normal: 120,
@@ -147,19 +147,12 @@ export function getEffortCeiling({ format = 'avif', bucket = 'normal' } = {}) {
   return EFFORT_CEILINGS[format]?.[bucket] ?? FORMAT_MAX_EFFORT[format] ?? 0;
 }
 
-export function getEffortLimitByMp({
-  format = 'avif',
-  width = 0,
-  height = 0,
-  frames = 1,
-  pixelCost = 0
-} = {}) {
+export function getEffortLimitByMp({ format = 'avif', width = 0, height = 0, frames = 1, pixelCost = 0 } = {}) {
   const px = Number(pixelCost) || (Number(width) || 1) * (Number(height) || 1) * (frames || 1);
   const mp = px / 1_000_000;
 
   if (format === 'avif') {
-    if (mp <= 1) return 6;
-    if (mp <= 2) return 5;
+    if (mp <= 1) return 5;
     if (mp <= 3) return 4;
     if (mp <= 6) return 3;
     if (mp <= 10) return 3;
@@ -186,7 +179,7 @@ export function classifyGeometry({ width = 0, height = 0, frames = 1, pixelCost 
   const h = Math.max(1, Number(height) || 1);
   const aspect = Math.max(w, h) / Math.max(Math.min(w, h), 1);
 
-  const px = Number(pixelCost) || (w * h * (frames || 1));
+  const px = Number(pixelCost) || w * h * (frames || 1);
 
   if (px < 1_000_000) {
     return 'tiny';
@@ -239,7 +232,7 @@ function getAverageNormalized(format, bucket) {
     return null;
   }
 
-  return average(entry.samples.map(sample => sample.normalizedMsPerMp));
+  return average(entry.samples.map((sample) => sample.normalizedMsPerMp));
 }
 
 function getFormatAverage(format) {
@@ -257,7 +250,7 @@ function getFormatAverage(format) {
     return null;
   }
 
-  return average(samples.map(sample => sample.normalizedMsPerMp));
+  return average(samples.map((sample) => sample.normalizedMsPerMp));
 }
 
 function getSampleCount(format, bucket) {
@@ -321,15 +314,12 @@ export function predictEncodeMs({
 
   const statsEntry = getStatsEntry(format, bucket);
 
-  const learned =
-    getAverageNormalized(format, bucket) ??
-    getFormatAverage(format);
+  const learned = getAverageNormalized(format, bucket) ?? getFormatAverage(format);
 
   const defaultBase = DEFAULT_MS_PER_MP[format]?.[bucket] ?? 1000;
 
-  // Vercel Node 24 + libvips microVMs are highly optimized. 
-// The legacy 3.5x penalty causes the Watchdog to falsely panic and crush resolutions.
-const SERVERLESS_PENALTY = 1.5;
+  // Built-in estimates are scaled by 1.5 for serverless overhead; learned stats are blended in below.
+  const SERVERLESS_PENALTY = 1.5;
   const priorBase = defaultBase * SERVERLESS_PENALTY;
 
   // Blend learned stats gradually to prevent sudden prediction jumps.
@@ -340,7 +330,7 @@ const SERVERLESS_PENALTY = 1.5;
     base = priorBase;
   } else {
     const trust = Math.min(1, sampleCount / 10);
-    base = (learned * trust) + (priorBase * (1 - trust));
+    base = learned * trust + priorBase * (1 - trust);
   }
 
   const baseline = BASELINE_EFFORT[format] ?? 0;
@@ -358,16 +348,13 @@ const SERVERLESS_PENALTY = 1.5;
 
   // Fixed encoder overhead.
   const baseOverhead = format === 'avif' ? 2500 : format === 'webp' ? 600 : 150;
-  const overheadMs = baseOverhead + (mp * 100);
+  const overheadMs = baseOverhead + mp * 100;
 
   // Live calibration from previous real encodes.
   const cal = getCalibration(format);
   const calibrationFactor = Number.isFinite(cal.factor) && cal.factor > 0 ? cal.factor : 1;
 
-  const predicted =
-    (decodeMs + encodeMs + overheadMs) *
-    (pressureMultiplier + failurePenalty) *
-    calibrationFactor;
+  const predicted = (decodeMs + encodeMs + overheadMs) * (pressureMultiplier + failurePenalty) * calibrationFactor;
 
   return Math.max(1, Math.round(predicted));
 }
@@ -386,28 +373,24 @@ export function chooseEffort({
 } = {}) {
   const maxFormatEffort = FORMAT_MAX_EFFORT[format] ?? 0;
   const bucket = classifyGeometry({ width, height, frames, pixelCost });
-  
+
   // MP ceiling as starting reference. Time budget governs the final selection.
   const mpCeiling = getEffortLimitByMp({ format, width, height, frames, pixelCost });
-  const max = Math.min(
-    Number.isFinite(maxEffort) ? maxEffort : maxFormatEffort,
-    maxFormatEffort,
-    mpCeiling
-  );
+  const max = Math.min(Number.isFinite(maxEffort) ? maxEffort : maxFormatEffort, maxFormatEffort, mpCeiling);
 
   const min = Math.max(0, Math.min(Number.isFinite(minEffort) ? minEffort : 0, max));
 
   let chosenEffort = min;
   let predictedMs = predictEncodeMs({
-      format,
-      width,
-      height,
-      frames,
-      pixelCost,
-      inputFormat,
-      effort: min,
-      pressure
-    });
+    format,
+    width,
+    height,
+    frames,
+    pixelCost,
+    inputFormat,
+    effort: min,
+    pressure
+  });
 
   for (let effort = max; effort >= min; effort--) {
     const predicted = predictEncodeMs({
@@ -468,7 +451,7 @@ export function recordEncode({
     entry.timeouts++;
   }
 
-    if (!success) {
+  if (!success) {
     entry.failures++;
   } else if (!timedOut && entry.failures > 0) {
     entry.failures--;
@@ -485,9 +468,7 @@ export function recordEncode({
     const msPerMp = encodeMs / mp;
     const baseline = BASELINE_EFFORT[format] ?? 0;
 
-    const normalizedMsPerMp =
-      msPerMp *
-      (effortFactor(format, baseline) / effortFactor(format, effort));
+    const normalizedMsPerMp = msPerMp * (effortFactor(format, baseline) / effortFactor(format, effort));
 
     entry.samples.push({
       at: Date.now(),
@@ -508,13 +489,7 @@ export function recordEncode({
   stats.set(key, entry);
 }
 
-export function recordRejection({
-  format = 'avif',
-  width = 0,
-  height = 0,
-  frames = 1,
-  pixelCost = 0
-} = {}) {
+export function recordRejection({ format = 'avif', width = 0, height = 0, frames = 1, pixelCost = 0 } = {}) {
   if (!Object.prototype.hasOwnProperty.call(FORMAT_MAX_EFFORT, format)) {
     return;
   }
@@ -528,7 +503,7 @@ export function recordRejection({
     failures: 0
   };
 
-    entry.rejections = Math.min(1000, (entry.rejections || 0) + 1);
+  entry.rejections = Math.min(1000, (entry.rejections || 0) + 1);
 
   stats.set(key, entry);
 }
@@ -541,7 +516,7 @@ export function getStatus() {
       samples: entry.samples.length,
       timeouts: entry.timeouts,
       failures: entry.failures,
-      avgNormalizedMsPerMp: average(entry.samples.map(sample => sample.normalizedMsPerMp))
+      avgNormalizedMsPerMp: average(entry.samples.map((sample) => sample.normalizedMsPerMp))
     };
   }
 
