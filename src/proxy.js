@@ -20,7 +20,7 @@ const UPSTREAM_DEADLINE_MS = parseInt(process.env.UPSTREAM_DEADLINE_MS, 10) || 5
 const UPSTREAM_TOTAL_DEADLINE_MS = safeInt(process.env.UPSTREAM_TOTAL_DEADLINE_MS, 55000);
 const MAX_RETRIES = safeInt(process.env.UPSTREAM_MAX_RETRIES, 2);
 
-// FEATURE: Corrupted Image Auto-Retry
+// Corrupt image auto-retry
 const MAX_DECODE_RETRIES = safeInt(process.env.MAX_DECODE_RETRIES, 1);
 const ENABLE_CORRUPT_RETRY = envBoolLocal('ENABLE_CORRUPT_RETRY', true);
 
@@ -42,18 +42,13 @@ const RAW_VAULT_MAX_ENTRIES = 10;
 const RAW_VAULT_ENTRY_OVERHEAD = 512;
 
 function vaultEntrySize(entry, key) {
-  const rawSize = Number.isFinite(entry?.size)
-    ? entry.size
-    : Buffer.byteLength(entry?.raw || '');
+  const rawSize = Number.isFinite(entry?.size) ? entry.size : Buffer.byteLength(entry?.raw || '');
 
   const keySize = Buffer.byteLength(String(key || ''));
   const etagSize = Buffer.byteLength(String(entry?.etag || ''));
   const lastModifiedSize = Buffer.byteLength(String(entry?.lastModified || ''));
 
-  return Math.max(
-    1,
-    rawSize + keySize + etagSize + lastModifiedSize + RAW_VAULT_ENTRY_OVERHEAD
-  );
+  return Math.max(1, rawSize + keySize + etagSize + lastModifiedSize + RAW_VAULT_ENTRY_OVERHEAD);
 }
 
 const RAW_VAULT = new LRUCache({
@@ -146,19 +141,17 @@ function extractGhostDims(buffer) {
     buffer.length >= 24 &&
     buffer[0] === 0x89 &&
     buffer[1] === 0x50 &&
-    buffer[2] === 0x4E &&
+    buffer[2] === 0x4e &&
     buffer[3] === 0x47 &&
-    buffer[4] === 0x0D &&
-    buffer[5] === 0x0A &&
-    buffer[6] === 0x1A &&
-    buffer[7] === 0x0A
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
   ) {
     const width = buffer.readUInt32BE(16);
     const height = buffer.readUInt32BE(20);
 
-    return isValidGhostDim(width) && isValidGhostDim(height)
-      ? { width, height }
-      : null;
+    return isValidGhostDim(width) && isValidGhostDim(height) ? { width, height } : null;
   }
 
   // GIF
@@ -167,22 +160,16 @@ function extractGhostDims(buffer) {
     const width = buffer.readUInt16LE(6);
     const height = buffer.readUInt16LE(8);
 
-    return isValidGhostDim(width) && isValidGhostDim(height)
-      ? { width, height }
-      : null;
+    return isValidGhostDim(width) && isValidGhostDim(height) ? { width, height } : null;
   }
 
   // JPEG
-  if (
-    buffer[0] === 0xFF &&
-    buffer[1] === 0xD8 &&
-    buffer[2] === 0xFF
-  ) {
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
     let offset = 2;
     const maxScan = Math.min(buffer.length, 1_000_000);
 
     while (offset + 4 <= maxScan) {
-      if (buffer[offset] !== 0xFF) {
+      if (buffer[offset] !== 0xff) {
         offset++;
         continue;
       }
@@ -190,37 +177,29 @@ function extractGhostDims(buffer) {
       const marker = buffer[offset + 1];
 
       // Skip fill bytes.
-      if (marker === 0xFF) {
+      if (marker === 0xff) {
         offset++;
         continue;
       }
 
       // SOI.
-      if (marker === 0xD8) {
+      if (marker === 0xd8) {
         offset += 2;
         continue;
       }
 
       // EOI or SOS: stop scanning.
-      if (marker === 0xD9 || marker === 0xDA) {
+      if (marker === 0xd9 || marker === 0xda) {
         break;
       }
 
       // SOF markers, excluding DHT/JPG/DAC-style markers.
-      if (
-        marker >= 0xC0 &&
-        marker <= 0xCF &&
-        marker !== 0xC4 &&
-        marker !== 0xC8 &&
-        marker !== 0xCC
-      ) {
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
         if (offset + 9 <= maxScan) {
           const height = buffer.readUInt16BE(offset + 5);
           const width = buffer.readUInt16BE(offset + 7);
 
-          return isValidGhostDim(width) && isValidGhostDim(height)
-            ? { width, height }
-            : null;
+          return isValidGhostDim(width) && isValidGhostDim(height) ? { width, height } : null;
         }
 
         break;
@@ -241,25 +220,35 @@ function extractGhostDims(buffer) {
 
 function sendGhost(res, cacheSeconds = 3600, hint = null, reason = 'unknown') {
   if (!res.headersSent) {
-            res.setHeader('X-Ghost-Reason', reason);
+    res.setHeader('X-Ghost-Reason', reason);
     // Transient failures: answer with a real error status so clients retry instead of saving a blank 1x1 page.
     const TRANSIENT_STATUS = { upstream_timeout: 504, byte_budget_exceeded: 503, proxy_error: 502 };
-    const transientStatus = TRANSIENT_STATUS[reason] || (reason === 'upstream_error_429' ? 503 : /^upstream_error_5\d\d$/.test(reason) ? 502 : 0);
+    const transientStatus =
+      TRANSIENT_STATUS[reason] ||
+      (reason === 'upstream_error_429' ? 503 : /^upstream_error_5\d\d$/.test(reason) ? 502 : 0);
     if (transientStatus) {
       res.setHeader('Retry-After', '5');
       res.setHeader('Cache-Control', 'no-store');
       return res.status(transientStatus).json({ error: 'Temporary upstream failure', reason });
     }
     // Redirecting the client to the original image is intentionally disabled: it would download uncompressed images.
-        if (['download_budget_exceeded', 'byte_budget_exceeded', 'body_too_large', 'upstream_timeout', 'proxy_error', 'decompress_failed', 'corrupt_image', 'not_an_image'].includes(reason)) cacheSeconds = 0;
+    if (
+      [
+        'download_budget_exceeded',
+        'byte_budget_exceeded',
+        'body_too_large',
+        'upstream_timeout',
+        'proxy_error',
+        'decompress_failed',
+        'corrupt_image',
+        'not_an_image'
+      ].includes(reason)
+    )
+      cacheSeconds = 0;
     const accept = String(hint?.accept || '');
     const body = hint?.body;
 
-    if (
-      accept.includes('image/svg+xml') &&
-      Buffer.isBuffer(body) &&
-      body.length > 0
-    ) {
+    if (accept.includes('image/svg+xml') && Buffer.isBuffer(body) && body.length > 0) {
       const dims = extractGhostDims(body);
       const svg = dims ? ghostSvgFromDims(dims.width, dims.height) : null;
 
@@ -304,7 +293,20 @@ function sanitizeUrl(url) {
 function redactUrlForCache(urlStr) {
   try {
     const u = new URL(urlStr);
-    const sensitiveParams = ['token', 'access_token', 'sig', 'signature', 'session', 'auth', 'secret', 'key', 'password', 'api', 'apikey', 'api_key'];
+    const sensitiveParams = [
+      'token',
+      'access_token',
+      'sig',
+      'signature',
+      'session',
+      'auth',
+      'secret',
+      'key',
+      'password',
+      'api',
+      'apikey',
+      'api_key'
+    ];
     for (const param of sensitiveParams) {
       if (u.searchParams.has(param)) {
         u.searchParams.set(param, '[REDACTED]');
@@ -317,26 +319,26 @@ function redactUrlForCache(urlStr) {
 }
 
 function sanitizeError(err) {
-let msg = err?.message ? String(err.message) : 'Unknown error';
-msg = msg.replace(/\?[^\s]*/g, '');
-msg = msg.replace(/(api[_-]?key|apikey|api|key|token|secret|password)=([^\s&]*)/gi, '$1=[REDACTED]');
-return msg;
+  let msg = err?.message ? String(err.message) : 'Unknown error';
+  msg = msg.replace(/\?[^\s]*/g, '');
+  msg = msg.replace(/(api[_-]?key|apikey|api|key|token|secret|password)=([^\s&]*)/gi, '$1=[REDACTED]');
+  return msg;
 }
 // OBSERVABILITY: safe, redacted, single-line preview of upstream failure bodies.
 function bodyPreview(buffer, maxBytes = 64) {
-if (!Buffer.isBuffer(buffer) || buffer.length === 0) return '';
-const slice = buffer.subarray(0, Math.min(maxBytes, buffer.length));
-let text = slice.toString('utf8');
-text = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '\uFFFD');
-text = text.replace(/(api[_-]?key|apikey|api|key|token|secret|password|keystamp)=([^\s&;]*)/gi, '$1=[REDACTED]');
-return text;
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) return '';
+  const slice = buffer.subarray(0, Math.min(maxBytes, buffer.length));
+  let text = slice.toString('utf8');
+  text = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '\uFFFD');
+  text = text.replace(/(api[_-]?key|apikey|api|key|token|secret|password|keystamp)=([^\s&;]*)/gi, '$1=[REDACTED]');
+  return text;
 }
 
 function isClientAborted(req) {
   return Boolean(req?.signal?.aborted);
 }
 
-// FEATURE: Corrupted Image Auto-Retry — detect sharp decode failures
+// Corrupt image auto-retry: detect sharp decode failures
 function isSharpDecodeError(err) {
   if (!err) return false;
   const msg = String(err.message || '').toLowerCase();
@@ -362,32 +364,26 @@ function detectContentType(buffer) {
 
   if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg';
 
-  if (
-    buffer.length >= 4 &&
-    buffer[0] === 0x89 && buffer[1] === 0x50 &&
-    buffer[2] === 0x4e && buffer[3] === 0x47
-  ) return 'image/png';
+  if (buffer.length >= 4 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47)
+    return 'image/png';
 
-  if (
-    buffer.length >= 4 &&
-    buffer[0] === 0x47 && buffer[1] === 0x49 &&
-    buffer[2] === 0x46 && buffer[3] === 0x38
-  ) return 'image/gif';
+  if (buffer.length >= 4 && buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38)
+    return 'image/gif';
 
   if (buffer[0] === 0x42 && buffer[1] === 0x4d) return 'image/bmp';
 
-  if (
-    buffer.length >= 6 &&
-    buffer[0] === 0x00 && buffer[1] === 0x00 &&
-    buffer[2] === 0x01 && buffer[3] === 0x00
-  ) return 'image/x-icon';
+  if (buffer.length >= 6 && buffer[0] === 0x00 && buffer[1] === 0x00 && buffer[2] === 0x01 && buffer[3] === 0x00)
+    return 'image/x-icon';
 
   if (
     buffer.length >= 12 &&
-    buffer[0] === 0x52 && buffer[1] === 0x49 &&
-    buffer[2] === 0x46 && buffer[3] === 0x46 &&
+    buffer[0] === 0x52 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x46 &&
     buffer.subarray(8, 12).toString('ascii') === 'WEBP'
-  ) return 'image/webp';
+  )
+    return 'image/webp';
 
   if (buffer.length >= 12 && buffer.subarray(4, 8).toString('ascii') === 'ftyp') {
     const brand = buffer.subarray(8, 12).toString('ascii');
@@ -504,7 +500,11 @@ async function safeRequest(url, headers, signal, maxRedirects = 5, deadlineMs = 
       throw err;
     }
 
-    const { statusCode, headers: resHeaders, body } = await request(currentUrl, {
+    const {
+      statusCode,
+      headers: resHeaders,
+      body
+    } = await request(currentUrl, {
       dispatcher: chromeDispatcher,
       method: 'GET',
       headers: requestHeaders,
@@ -555,8 +555,13 @@ async function safeRequest(url, headers, signal, maxRedirects = 5, deadlineMs = 
 }
 
 const RETRYABLE_CODES = new Set([
-  'ETIMEDOUT', 'ERR_GOT_REQUEST_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
-  'UND_ERR_BODY_TIMEOUT', 'UPSTREAM_DEADLINE', 'ECONNRESET', 'UND_ERR_CONNECT_TIMEOUT'
+  'ETIMEDOUT',
+  'ERR_GOT_REQUEST_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+  'UPSTREAM_DEADLINE',
+  'ECONNRESET',
+  'UND_ERR_CONNECT_TIMEOUT'
 ]);
 
 const RETRYABLE_STATUSES = new Set([408, 500, 502, 503, 504, 429, 520, 521, 522, 523, 524]);
@@ -599,7 +604,7 @@ async function fetchWithBackoff(url, headers, signal, deadlineAt = Date.now() + 
         break;
       }
 
-      await new Promise(resolve => setTimeout(resolve, delay));
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 
@@ -621,11 +626,11 @@ export default async function proxy(req, res) {
   let targetUrl = req.opts?.url; // only the URL already vetted by params.js/parseSafeUrl; never fall back to raw query input
 
   if (Array.isArray(targetUrl)) {
-    targetUrl = targetUrl.find(u => u && typeof u === 'string') || String(targetUrl[0]);
+    targetUrl = targetUrl.find((u) => u && typeof u === 'string') || String(targetUrl[0]);
   }
 
   if (!targetUrl || typeof targetUrl !== 'string') {
-  return sendGhost(res, 60, null, 'missing_url');
+    return sendGhost(res, 60, null, 'missing_url');
   }
 
   targetUrl = targetUrl.trim();
@@ -635,25 +640,27 @@ export default async function proxy(req, res) {
   }
 
   try {
-  targetUrl = new URL(targetUrl).href;
+    targetUrl = new URL(targetUrl).href;
   } catch {
-  return sendGhost(res, 60, null, 'invalid_url');
+    return sendGhost(res, 60, null, 'invalid_url');
   }
 
-    res.locals.failOpenUrl = targetUrl;
+  res.locals.failOpenUrl = targetUrl;
   const { 'user-agent': userAgent } = req.headers;
 
   let autoReferer = '';
   try {
     const parsedTarget = new URL(targetUrl);
-        autoReferer = parsedTarget.origin;
+    autoReferer = parsedTarget.origin;
   } catch {}
 
   // Hotlink-protected hosts validate the *embedding page's* Referer, not their own origin.
   // Forward what the browser sent (or what the worker relayed) when present; same exposure as a native image load.
-      let relayReferer = '';
+  let relayReferer = '';
   if (process.env.FORWARD_CLIENT_REFERER !== 'false') {
-    const clientRef = String((req.authVia === 'service' ? req.headers['x-client-referer'] : '') || req.headers.referer || '').trim();
+    const clientRef = String(
+      (req.authVia === 'service' ? req.headers['x-client-referer'] : '') || req.headers.referer || ''
+    ).trim();
     if (clientRef && clientRef.length <= 2048 && /^https?:\/\//i.test(clientRef)) {
       try {
         const refUrl = new URL(clientRef);
@@ -700,7 +707,11 @@ export default async function proxy(req, res) {
     if (internalKey) {
       isWorkerFetch = true;
       fetchUrl = `${workerBase}/raw?url=${encodeURIComponent(targetUrl)}`;
-                  fetchHeaders = { ...headers, 'x-internal-key': internalKey, ...(relayReferer ? { 'x-upstream-referer': relayReferer } : {}) };
+      fetchHeaders = {
+        ...headers,
+        'x-internal-key': internalKey,
+        ...(relayReferer ? { 'x-upstream-referer': relayReferer } : {})
+      };
     }
   }
 
@@ -721,8 +732,18 @@ export default async function proxy(req, res) {
   } catch (err) {
     if (isClientAborted(req)) return;
 
-        if (isWorkerFetch) {
-      log.warn({ event: 'WORKER_RELAY_FALLBACK', reqId, workerStatus: statusCode ?? null, workerError: sanitizeError(err), workerContentType: responseHeaders?.['content-type'] ?? null, workerBody: bodyPreview(response?.body, 120) }, '[RELAY] Cloudflare worker fetch failed, falling back to direct');
+    if (isWorkerFetch) {
+      log.warn(
+        {
+          event: 'WORKER_RELAY_FALLBACK',
+          reqId,
+          workerStatus: statusCode ?? null,
+          workerError: sanitizeError(err),
+          workerContentType: responseHeaders?.['content-type'] ?? null,
+          workerBody: bodyPreview(response?.body, 120)
+        },
+        '[RELAY] Cloudflare worker fetch failed, falling back to direct'
+      );
       activeUrl = targetUrl;
       activeHeaders = headers;
 
@@ -743,7 +764,7 @@ export default async function proxy(req, res) {
     // WAFs/CDNs often block requests where Referer matches the image origin,
     // sometimes returning 403, sometimes 404 to hide the file's existence.
     // Strip referer on retry to mimic native app/direct load behavior.
-        const { referer, 'x-upstream-referer': _xur, 'sec-fetch-site': _sfs, ...restHeaders } = activeHeaders;
+    const { referer, 'x-upstream-referer': _xur, 'sec-fetch-site': _sfs, ...restHeaders } = activeHeaders;
     const retryHeaders = {
       ...restHeaders,
       'user-agent': getRandomUA(),
@@ -759,13 +780,21 @@ export default async function proxy(req, res) {
     }
   }
 
-    // Last resort: fetch the way the app itself does (client's own UA, no browser-only headers).
+  // Last resort: fetch the way the app itself does (client's own UA, no browser-only headers).
   // Some hosts reject header sets that contradict the client's UA.
   if (statusCode === 401 || statusCode === 403 || statusCode === 404) {
     try {
-      const nativeResponse = await fetchWithBackoff(targetUrl, { 'user-agent': userAgent || getRandomUA(), 'accept-encoding': UPSTREAM_ACCEPT_ENCODING }, req.signal, upstreamDeadlineAt);
+      const nativeResponse = await fetchWithBackoff(
+        targetUrl,
+        { 'user-agent': userAgent || getRandomUA(), 'accept-encoding': UPSTREAM_ACCEPT_ENCODING },
+        req.signal,
+        upstreamDeadlineAt
+      );
       if (nativeResponse.statusCode < 400) {
-        log.info({ event: 'NATIVE_FETCH_OK', reqId, status: nativeResponse.statusCode }, '[NATIVE] App-style fetch succeeded after browser-style attempts failed');
+        log.info(
+          { event: 'NATIVE_FETCH_OK', reqId, status: nativeResponse.statusCode },
+          '[NATIVE] App-style fetch succeeded after browser-style attempts failed'
+        );
         response = nativeResponse;
         statusCode = nativeResponse.statusCode;
         responseHeaders = nativeResponse.headers;
@@ -777,8 +806,8 @@ export default async function proxy(req, res) {
 
   let reservedBodyBytes = 0;
 
-try {
-  let rawBody;
+  try {
+    let rawBody;
 
     if (statusCode === 304 && vaultEntry) {
       rawBody = vaultEntry.raw;
@@ -797,20 +826,20 @@ try {
     }
 
     log.info({ event: 'FETCH_COMPLETE', reqId, fetchMs: Date.now() - startTime, bytes: rawBody.length });
-    
+
     const downloadBudget = memoryGovernor.getDownloadBudget();
     if (rawBody.length > downloadBudget) {
       return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'download_budget_exceeded');
     }
 
-  if (rawBody.length > 0) {
-  if (!memoryGovernor.admitBytes(rawBody.length)) {
-    return sendGhost(res, 60, { body: rawBody, accept: req.headers.accept }, 'byte_budget_exceeded');
-  }
+    if (rawBody.length > 0) {
+      if (!memoryGovernor.admitBytes(rawBody.length)) {
+        return sendGhost(res, 60, { body: rawBody, accept: req.headers.accept }, 'byte_budget_exceeded');
+      }
 
-  reservedBodyBytes = rawBody.length;
-  }
-    
+      reservedBodyBytes = rawBody.length;
+    }
+
     if (
       statusCode === 200 &&
       rawBody.length <= RAW_VAULT_MAX_ENTRY &&
@@ -828,39 +857,66 @@ try {
     const upstreamMaxAgeMatch = upstreamCacheControl.match(/max-age=(\d+)/i);
     const upstreamMaxAge = upstreamMaxAgeMatch ? parseInt(upstreamMaxAgeMatch[1], 10) : null;
 
-    if (statusCode === 404 || statusCode === 410 || statusCode === 403 || (statusCode !== 304 && (statusCode < 200 || statusCode >= 300))) {
-log.warn({
-event: 'GHOST',
-reqId,
-reason: statusCode === 404 ? 'upstream_404' : statusCode === 410 ? 'upstream_410_gone' : statusCode === 403 ? 'upstream_403' : `upstream_error_${statusCode}`,
-upstreamStatus: statusCode,
-bytes: rawBody.length,
-bodyPreview: bodyPreview(rawBody, 64),
-url: sanitizeUrl(targetUrl)
-}, '[GHOST] Upstream error status');
-}
-if (statusCode === 404) return sendGhost(res, 300, { body: rawBody, accept: req.headers.accept }, 'upstream_404')
-if (statusCode === 410) return sendGhost(res, 86400, { body: rawBody, accept: req.headers.accept }, 'upstream_410_gone');
-if (statusCode === 403) return sendGhost(res, 300, { body: rawBody, accept: req.headers.accept }, 'upstream_403')
-if (statusCode !== 304 && (statusCode < 200 || statusCode >= 300)) {
-return sendGhost(res, 60, { body: rawBody, accept: req.headers.accept }, `upstream_error_${statusCode}`);
-}
-  
-    const detectedType = detectContentType(rawBody);
-if (!detectedType.startsWith('image/')) {
-log.warn({
-event: 'GHOST',
-reqId,
-reason: 'not_an_image',
-upstreamStatus: statusCode,
-upstreamType: detectedType,
-bytes: rawBody.length,
-bodyPreview: bodyPreview(rawBody, 64),
-url: sanitizeUrl(targetUrl)
-}, '[GHOST] Upstream returned non-image body');
-return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'not_an_image');
-}
-    
+    if (
+      statusCode === 404 ||
+      statusCode === 410 ||
+      statusCode === 403 ||
+      (statusCode !== 304 && (statusCode < 200 || statusCode >= 300))
+    ) {
+      log.warn(
+        {
+          event: 'GHOST',
+          reqId,
+          reason:
+            statusCode === 404
+              ? 'upstream_404'
+              : statusCode === 410
+                ? 'upstream_410_gone'
+                : statusCode === 403
+                  ? 'upstream_403'
+                  : `upstream_error_${statusCode}`,
+          upstreamStatus: statusCode,
+          bytes: rawBody.length,
+          bodyPreview: bodyPreview(rawBody, 64),
+          url: sanitizeUrl(targetUrl)
+        },
+        '[GHOST] Upstream error status'
+      );
+    }
+    if (statusCode === 404) return sendGhost(res, 300, { body: rawBody, accept: req.headers.accept }, 'upstream_404');
+    if (statusCode === 410)
+      return sendGhost(res, 86400, { body: rawBody, accept: req.headers.accept }, 'upstream_410_gone');
+    if (statusCode === 403) return sendGhost(res, 300, { body: rawBody, accept: req.headers.accept }, 'upstream_403');
+    if (statusCode !== 304 && (statusCode < 200 || statusCode >= 300)) {
+      return sendGhost(res, 60, { body: rawBody, accept: req.headers.accept }, `upstream_error_${statusCode}`);
+    }
+
+    // Unknown magic bytes but the upstream declares an image type: let sharp try it instead of blocking the codec.
+    // If sharp cannot decode it, compress.js fails the request and logs CODEC_UNSUPPORTED (no uncompressed fallback).
+    const sniffedType = detectContentType(rawBody);
+    const declaredType = String(responseHeaders?.['content-type'] || '')
+      .split(';')[0]
+      .trim()
+      .toLowerCase();
+    const detectedType =
+      !sniffedType.startsWith('image/') && /^image\/[a-z0-9.+-]+$/.test(declaredType) ? declaredType : sniffedType;
+    if (!detectedType.startsWith('image/')) {
+      log.warn(
+        {
+          event: 'GHOST',
+          reqId,
+          reason: 'not_an_image',
+          upstreamStatus: statusCode,
+          upstreamType: detectedType,
+          bytes: rawBody.length,
+          bodyPreview: bodyPreview(rawBody, 64),
+          url: sanitizeUrl(targetUrl)
+        },
+        '[GHOST] Upstream returned non-image body'
+      );
+      return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'not_an_image');
+    }
+
     if (req.query?.debug === '1') {
       try {
         const metadata = await sharp(rawBody).metadata();
@@ -910,16 +966,25 @@ return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'not_
     res.setHeader('Content-Type', detectedType);
     res.setHeader('x-upstream-content-length', String(rawBody.length));
     res.setHeader('ETag', etag);
-    res.setHeader('Vary', 'Accept, Accept-Encoding, Save-Data, Sec-CH-Save-Data, X-API-Key, Authorization, X-Vercel-Service-Key');
+    res.setHeader(
+      'Vary',
+      'Accept, Accept-Encoding, Save-Data, Sec-CH-Save-Data, X-API-Key, Authorization, X-Vercel-Service-Key'
+    );
 
     if (isNoStore) {
       res.setHeader('Cache-Control', 'no-store');
     } else if (upstreamMaxAge !== null && upstreamMaxAge > 0) {
       const ttl = Math.min(upstreamMaxAge, 30 * 24 * 60 * 60);
-      res.setHeader('Cache-Control', `public, max-age=${ttl}, s-maxage=${ttl}, stale-while-revalidate=604800, stale-if-error=604800`);
+      res.setHeader(
+        'Cache-Control',
+        `public, max-age=${ttl}, s-maxage=${ttl}, stale-while-revalidate=604800, stale-if-error=604800`
+      );
       res.setHeader('x-upstream-max-age', String(upstreamMaxAge));
     } else {
-      res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800, stale-if-error=604800');
+      res.setHeader(
+        'Cache-Control',
+        'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800, stale-if-error=604800'
+      );
     }
 
     req.opts.originType = detectedType;
@@ -931,7 +996,7 @@ return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'not_
       (requestedFormat === 'avif' && detectedType === 'image/avif');
 
     const isModernFormat = detectedType === 'image/webp' || detectedType === 'image/avif';
-        const bypassKb = Number.parseInt(process.env.BYPASS_SMALL_MODERN_KB ?? '0', 10);
+    const bypassKb = Number.parseInt(process.env.BYPASS_SMALL_MODERN_KB ?? '0', 10);
     const isSmallFile = Number.isFinite(bypassKb) && rawBody.length < bypassKb * 1024;
 
     if (isModernFormat && isSmallFile && formatMatchesDetected) {
@@ -943,9 +1008,9 @@ return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'not_
     if (!compressEligible) {
       const { originType } = req.opts || {};
       const isImageType = originType && originType.startsWith('image/');
-      const isExcludedType = ['image/svg+xml', 'application/pdf', 'image/x-icon', 'image/vnd.microsoft.icon'].includes(originType);
+      const isExcludedType = ['application/pdf', 'image/x-icon', 'image/vnd.microsoft.icon'].includes(originType);
 
-      // Force-AVIF: if it's a valid image but rejected due to memory budget, return 503
+      // A valid image rejected by the memory budget gets a retryable 503, never an uncompressed passthrough
       if (isImageType && !isExcludedType) {
         res.setHeader('Retry-After', '5');
         res.setHeader('Cache-Control', 'no-store');
@@ -968,7 +1033,7 @@ return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'not_
         compressError = err;
       }
 
-      // FEATURE: Corrupted Image Auto-Retry
+      // Corrupt image auto-retry
       if (compressError && ENABLE_CORRUPT_RETRY && isSharpDecodeError(compressError)) {
         res.setHeader('X-Corrupt-Retry', 'TRIGGERED');
         log.warn({ reqId }, '[CORRUPT RETRY] Decode failure detected, retrying with new UA');
@@ -1002,23 +1067,23 @@ return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'not_
             }
 
             const retryBudget = memoryGovernor.getDownloadBudget();
-if (decompressedRetry.length > retryBudget) continue;
-const retryType = detectContentType(decompressedRetry);
-if (!retryType.startsWith('image/')) continue;
+            if (decompressedRetry.length > retryBudget) continue;
+            const retryType = detectContentType(decompressedRetry);
+            if (!retryType.startsWith('image/')) continue;
 
-// C-014: Fix memory accounting for retry body
-if (reservedBodyBytes > 0) {
-  memoryGovernor.releaseBytes(reservedBodyBytes);
-  reservedBodyBytes = 0;
-}
-if (!memoryGovernor.admitBytes(decompressedRetry.length)) {
-  continue;
-}
-reservedBodyBytes = decompressedRetry.length;
-rawBody = decompressedRetry;
+            // Release the memory reserved for the first body before admitting the retry body
+            if (reservedBodyBytes > 0) {
+              memoryGovernor.releaseBytes(reservedBodyBytes);
+              reservedBodyBytes = 0;
+            }
+            if (!memoryGovernor.admitBytes(decompressedRetry.length)) {
+              continue;
+            }
+            reservedBodyBytes = decompressedRetry.length;
+            rawBody = decompressedRetry;
 
-// Retry compress with fresh body
-compressedResult = await compress(req, res, decompressedRetry, memoryGovernor);
+            // Retry compress with fresh body
+            compressedResult = await compress(req, res, decompressedRetry, memoryGovernor);
             retrySuccess = true;
             res.setHeader('X-Corrupt-Retry', `SUCCESS_ATTEMPT_${attempt}`);
             rawBody = decompressedRetry;
@@ -1034,19 +1099,22 @@ compressedResult = await compress(req, res, decompressedRetry, memoryGovernor);
         }
 
         if (!retrySuccess && !compressedResult) {
-log.error({
-reqId,
-bytes: rawBody.length,
-bodyPreview: bodyPreview(rawBody, 64),
-url: sanitizeUrl(targetUrl)
-}, '[CORRUPT RETRY] All retry attempts exhausted');
-return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'corrupt_image');
-}
+          log.error(
+            {
+              reqId,
+              bytes: rawBody.length,
+              bodyPreview: bodyPreview(rawBody, 64),
+              url: sanitizeUrl(targetUrl)
+            },
+            '[CORRUPT RETRY] All retry attempts exhausted'
+          );
+          return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'corrupt_image');
+        }
       } else if (compressError) {
         throw compressError;
       }
 
-            if (!res.writableEnded) {
+      if (!res.writableEnded) {
         if (compressedResult && compressedResult.length > 0) {
           res.end(compressedResult);
         } else if (!res.headersSent && res.statusCode === 200) {
@@ -1062,7 +1130,7 @@ return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'corr
           res.end();
         }
       }
-      
+
       return;
     }
 
@@ -1071,9 +1139,7 @@ return sendGhost(res, 3600, { body: rawBody, accept: req.headers.accept }, 'corr
     if (isClientAborted(req)) return;
 
     const isBodyTooLarge =
-      error.message === 'BODY_TOO_LARGE' ||
-      error.code === 'ERR_BODY_LARGE' ||
-      error.code === 'BODY_TOO_LARGE';
+      error.message === 'BODY_TOO_LARGE' || error.code === 'ERR_BODY_LARGE' || error.code === 'BODY_TOO_LARGE';
 
     if (isBodyTooLarge) return sendGhost(res, 3600, null, 'body_too_large');
 
