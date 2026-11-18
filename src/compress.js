@@ -1695,6 +1695,7 @@ export default async function compress(req, res, buffer, governor) {
       if (
         ENABLE_DESKEW &&
         allowEnhancements &&
+        (metadata.pages || 1) <= 1 &&
         analysis.isGrayscale &&
         !isMangaMode &&
         !isStripMode &&
