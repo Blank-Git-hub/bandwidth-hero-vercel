@@ -219,7 +219,7 @@ function gracefulShutdown(signal) {
   isShuttingDown = true;
   const forceTimeout = setTimeout(() => process.exit(1), SHUTDOWN_TIMEOUT);
   const checkInterval = setInterval(() => {
-    if (activeRequests === 0 && activeEncodes === 0) {
+    if (activeRequests === 0 && activeEncodes === 0 && inflight.current() === 0) {
       clearTimeout(forceTimeout);
       clearInterval(checkInterval);
       process.exit(0);
@@ -1329,7 +1329,7 @@ export default async function compress(req, res, buffer, governor) {
     let metadata = await sharp(buffer).metadata();
     const format = metadata.format;
 
-    if (!format || format === 'raw') return buffer;
+    if (!format || format === 'raw') throw new Error('Input buffer contains unsupported image format');
 
     const mode = req.opts?.mode || 'auto';
     const isPhotoMode = mode === 'photo' || mode === 'normal';
@@ -2621,10 +2621,8 @@ export default async function compress(req, res, buffer, governor) {
         textPreservation: getHeaderStr('X-Text-Preservation') === 'ACTIVE',
         textSharpen: getHeaderStr('X-Text-Sharpen') === 'BOOSTED',
         hdrConversion: getHeaderStr('X-HDR-Conversion') === 'ACTIVE',
-        hdrToneMap: getHeaderStr('X-HDR-ToneMap') || false,
         alphaTrim: getHeaderStr('X-Alpha-Trim') === 'ACTIVE',
         alphaTrimPad: getHeaderStr('X-Alpha-Trim-Pad') || false,
-        frameDrop: getHeaderStr('X-Frame-Drop') || false,
         metadataReaper: ENABLE_METADATA_REAPER,
         safeMetadata: ENABLE_SAFE_METADATA,
 
