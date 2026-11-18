@@ -290,34 +290,6 @@ function sanitizeUrl(url) {
   }
 }
 
-function redactUrlForCache(urlStr) {
-  try {
-    const u = new URL(urlStr);
-    const sensitiveParams = [
-      'token',
-      'access_token',
-      'sig',
-      'signature',
-      'session',
-      'auth',
-      'secret',
-      'key',
-      'password',
-      'api',
-      'apikey',
-      'api_key'
-    ];
-    for (const param of sensitiveParams) {
-      if (u.searchParams.has(param)) {
-        u.searchParams.set(param, '[REDACTED]');
-      }
-    }
-    return u.href;
-  } catch {
-    return urlStr;
-  }
-}
-
 function sanitizeError(err) {
   let msg = err?.message ? String(err.message) : 'Unknown error';
   msg = msg.replace(/\?[^\s]*/g, '');
@@ -611,6 +583,39 @@ async function fetchWithBackoff(url, headers, signal, deadlineAt = Date.now() + 
   throw lastError || new Error('UPSTREAM_TOTAL_DEADLINE');
 }
 
+function sendUpstreamFailure(req, res, error, log, reqId) {
+  if (isClientAborted(req)) return;
+
+  const isBodyTooLarge =
+    error.message === 'BODY_TOO_LARGE' || error.code === 'ERR_BODY_LARGE' || error.code === 'BODY_TOO_LARGE';
+
+  if (isBodyTooLarge) return sendGhost(res, 3600, null, 'body_too_large');
+
+  const code = error.code;
+
+  if (code === 'SSRF_BLOCKED_REDIRECT') {
+    return sendGhost(res, 86400, null, 'ssrf_blocked');
+  }
+
+  // Unresolvable or blocked DNS is usually transient: answer with a retryable error, never a cached blank image.
+  if (code === 'SSRF_BLOCKED_DNS') {
+    return sendGhost(res, 60, null, 'proxy_error');
+  }
+
+  if (
+    code === 'ETIMEDOUT' ||
+    code === 'ERR_GOT_REQUEST_TIMEOUT' ||
+    code === 'UND_ERR_HEADERS_TIMEOUT' ||
+    code === 'UND_ERR_BODY_TIMEOUT' ||
+    code === 'UPSTREAM_DEADLINE'
+  ) {
+    return sendGhost(res, 60, null, 'upstream_timeout');
+  }
+
+  log.error({ reqId, error: sanitizeError(error) }, '[PROXY ERROR]');
+  return sendGhost(res, 60, null, 'proxy_error');
+}
+
 export default async function proxy(req, res) {
   const startTime = Date.now();
   req.proxyStartedAt = startTime;
@@ -752,11 +757,10 @@ export default async function proxy(req, res) {
         statusCode = response.statusCode;
         responseHeaders = response.headers;
       } catch (fallbackErr) {
-        if (isClientAborted(req)) return;
-        throw fallbackErr;
+        return sendUpstreamFailure(req, res, fallbackErr, log, reqId);
       }
     } else {
-      throw err;
+      return sendUpstreamFailure(req, res, err, log, reqId);
     }
   }
 
@@ -1136,31 +1140,7 @@ export default async function proxy(req, res) {
 
     return bypass(req, res, rawBody, statusCode);
   } catch (error) {
-    if (isClientAborted(req)) return;
-
-    const isBodyTooLarge =
-      error.message === 'BODY_TOO_LARGE' || error.code === 'ERR_BODY_LARGE' || error.code === 'BODY_TOO_LARGE';
-
-    if (isBodyTooLarge) return sendGhost(res, 3600, null, 'body_too_large');
-
-    const code = error.code;
-
-    if (code === 'SSRF_BLOCKED_REDIRECT' || code === 'SSRF_BLOCKED_DNS') {
-      return sendGhost(res, 86400, null, 'ssrf_blocked');
-    }
-
-    if (
-      code === 'ETIMEDOUT' ||
-      code === 'ERR_GOT_REQUEST_TIMEOUT' ||
-      code === 'UND_ERR_HEADERS_TIMEOUT' ||
-      code === 'UND_ERR_BODY_TIMEOUT' ||
-      code === 'UPSTREAM_DEADLINE'
-    ) {
-      return sendGhost(res, 60, null, 'upstream_timeout');
-    }
-
-    log.error({ reqId, error: sanitizeError(error) }, '[PROXY ERROR]');
-    return sendGhost(res, 60, null, 'proxy_error');
+    return sendUpstreamFailure(req, res, error, log, reqId);
   } finally {
     if (reservedBodyBytes > 0) {
       memoryGovernor.releaseBytes(reservedBodyBytes);
