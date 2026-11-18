@@ -19,15 +19,9 @@ function safeInt(value, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-const UPSTASH_CIRCUIT_FAILURE_THRESHOLD = safeInt(
-  process.env.UPSTASH_CIRCUIT_FAILURE_THRESHOLD,
-  5
-);
+const UPSTASH_CIRCUIT_FAILURE_THRESHOLD = safeInt(process.env.UPSTASH_CIRCUIT_FAILURE_THRESHOLD, 5);
 
-const UPSTASH_CIRCUIT_OPEN_MS = safeInt(
-  process.env.UPSTASH_CIRCUIT_OPEN_MS,
-  10000
-);
+const UPSTASH_CIRCUIT_OPEN_MS = safeInt(process.env.UPSTASH_CIRCUIT_OPEN_MS, 10000);
 
 const upstashCircuit = {
   failures: 0,
@@ -197,9 +191,7 @@ function buildDistributedKey({ scope, key, windowMs }) {
 async function distributedPeek(params) {
   const key = buildDistributedKey(params);
 
-  const json = await upstashCommand([
-    ['GET', key]
-  ]);
+  const json = await upstashCommand([['GET', key]]);
 
   const raw = extractFirstResult(json);
   const count = parseInt(raw, 10);
@@ -233,9 +225,7 @@ async function distributedIncrement(params) {
 async function distributedReset(params) {
   const key = buildDistributedKey(params);
 
-  await upstashCommand([
-    ['DEL', key]
-  ]);
+  await upstashCommand([['DEL', key]]);
 }
 
 async function withFallback(distributedFn, memoryFn) {
