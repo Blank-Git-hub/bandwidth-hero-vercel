@@ -2,12 +2,8 @@
 export default function middleware(request) {
   const url = new URL(request.url);
 
-  // F8: Allow GET, HEAD, and OPTIONS through
-  if (
-    request.method !== 'GET' &&
-    request.method !== 'HEAD' &&
-    request.method !== 'OPTIONS'
-  ) {
+  // Allow GET, HEAD and OPTIONS through
+  if (request.method !== 'GET' && request.method !== 'HEAD' && request.method !== 'OPTIONS') {
     return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
       status: 405,
       headers: {
@@ -28,18 +24,21 @@ export default function middleware(request) {
     });
   }
 
-  // F17: /badge returns minimal info, no internal feature names
+  // /badge returns minimal info and no internal feature names
   if (url.pathname === '/badge' || url.pathname === '/info') {
-    return new Response(JSON.stringify({
-      proxy: 'bandwidth-hero',
-      version: '2.0'
-    }), {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json',
-        'Cache-Control': 'public, max-age=3600'
+    return new Response(
+      JSON.stringify({
+        proxy: 'bandwidth-hero',
+        version: '2.0'
+      }),
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'public, max-age=3600'
+        }
       }
-    });
+    );
   }
 
   return undefined;
