@@ -50,7 +50,7 @@ describe('urlGuard SSRF protection', () => {
     assert.equal(isPublicIP('::ffff:10.0.0.1'), false);
   });
 
-    test('blocks IPv4-compatible IPv6 (::/96)', () => {
+  test('blocks IPv4-compatible IPv6 (::/96)', () => {
     assert.equal(isPublicIP('::7f00:1'), false);
     assert.equal(isPublicIP('::a00:1'), false);
     assert.equal(parseSafeUrl('http://[::7f00:1]/x'), null);
@@ -110,10 +110,10 @@ describe('shouldCompress', () => {
     assert.equal(shouldCompress(req, 'not a buffer', null), false);
   });
 
-  test('rejects SVG', () => {
+  test('accepts SVG (sharp rasterizes it)', () => {
     const req = { opts: { originType: 'image/svg+xml' } };
     const buf = Buffer.from('<svg></svg>');
-    assert.equal(shouldCompress(req, buf, null), false);
+    assert.equal(shouldCompress(req, buf, null), true);
   });
 
   test('rejects PDF', () => {
@@ -130,11 +130,11 @@ describe('shouldCompress', () => {
 
   test('accepts JPEG with no governor', () => {
     const req = { opts: { originType: 'image/jpeg' } };
-    const buf = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]);
+    const buf = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
     assert.equal(shouldCompress(req, buf, null), true);
   });
 
-  // F19: Test adaptive size decision without allocating large buffers
+  // Test the adaptive size decision without allocating large buffers
   test('rejects when memory governor budget is too small', () => {
     const req = { opts: { originType: 'image/jpeg' } };
     const buf = Buffer.alloc(1024);
