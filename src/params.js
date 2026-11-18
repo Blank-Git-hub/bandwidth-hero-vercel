@@ -71,33 +71,23 @@ const DEFAULT_MAX_OUTPUT_DIM = clampInt(process.env.MAX_OUTPUT_DIM, 2560, 0, 409
 const DEFAULT_MAX_STRIP_WIDTH = clampInt(process.env.MAX_STRIP_WIDTH, 1600, 0, 4096);
 
 const DEFAULT_GRAYSCALE = ['1', 'true', 'yes', 'on'].includes(
-  String(process.env.DEFAULT_GRAYSCALE || process.env.DEFAULT_BW || '').trim().toLowerCase()
+  String(process.env.DEFAULT_GRAYSCALE || process.env.DEFAULT_BW || '')
+    .trim()
+    .toLowerCase()
 );
 
 const ALLOW_ACCEPT_FALLBACK = ['1', 'true', 'yes', 'on'].includes(
-  String(process.env.ALLOW_ACCEPT_FALLBACK || '').trim().toLowerCase()
+  String(process.env.ALLOW_ACCEPT_FALLBACK || '')
+    .trim()
+    .toLowerCase()
 );
 
-const AUTH_PARAMS = [
-  'api',
-  'apikey',
-  'api_key'
-];
+const AUTH_PARAMS = ['api', 'apikey', 'api_key'];
 
-// F12-MODIFIED: raw/bypass removed
-const ALLOWED_MODES = new Set([
-  'auto',
-  'photo',
-  'normal',
-  'manga',
-  'comic',
-  'strip',
-  'webtoon',
-  'manhwa',
-  'manhua'
-]);
+// Allowed processing modes (raw/bypass are not accepted)
+const ALLOWED_MODES = new Set(['auto', 'photo', 'normal', 'manga', 'comic', 'strip', 'webtoon', 'manhwa', 'manhua']);
 
-// F13-MODIFIED: Safe rotation increments only
+// Safe rotation increments only
 const SAFE_ROTATIONS = new Set([90, 180, 270]);
 
 const INTERNAL_FORMAT_PARAM = '__bw_fmt';
@@ -130,7 +120,7 @@ function parseQuality(q, defaultValue, min, max) {
   return n;
 }
 
-// F13-MODIFIED: Parse safe rotation
+// Parse a rotation value (safe increments only)
 function parseRotation(value) {
   const n = parseInt(value, 10);
   if (SAFE_ROTATIONS.has(n)) return n;
@@ -169,9 +159,30 @@ function parseFormat(req) {
 }
 
 const PROXY_PARAM_NAMES = new Set([
-  'api', 'apikey', 'api_key', 'jpeg', 'avif', 'webp', 'bw', 'l', 'q', 'quality',
-  'max_dim', 'maxdim', 'max', 'strip_w', 'stripw', 'strip_width', 'rotate', 'mode',
-  'sharpen', 'minsize', 'etag', 'conditional', 'debug', INTERNAL_FORMAT_PARAM
+  'api',
+  'apikey',
+  'api_key',
+  'jpeg',
+  'avif',
+  'webp',
+  'bw',
+  'l',
+  'q',
+  'quality',
+  'max_dim',
+  'maxdim',
+  'max',
+  'strip_w',
+  'stripw',
+  'strip_width',
+  'rotate',
+  'mode',
+  'sharpen',
+  'minsize',
+  'etag',
+  'conditional',
+  'debug',
+  INTERNAL_FORMAT_PARAM
 ]);
 
 // Some clients append the image URL UNENCODED (...&url=https://cdn/x.jpg?a=1&b=2).
@@ -191,7 +202,10 @@ function recoverUnencodedUrl(req) {
   for (;;) {
     const amp = value.lastIndexOf('&');
     if (amp === -1) break;
-    const name = value.slice(amp + 1).split('=')[0].toLowerCase();
+    const name = value
+      .slice(amp + 1)
+      .split('=')[0]
+      .toLowerCase();
     if (!PROXY_PARAM_NAMES.has(name)) break;
     value = value.slice(0, amp);
   }
@@ -224,11 +238,7 @@ function params(req, res, next) {
   try {
     let url;
 
-    if (
-      req.query &&
-      typeof req.query === 'object' &&
-      Object.prototype.hasOwnProperty.call(req.query, 'url')
-    ) {
+    if (req.query && typeof req.query === 'object' && Object.prototype.hasOwnProperty.call(req.query, 'url')) {
       url = req.query.url;
     }
 
@@ -293,28 +303,13 @@ function params(req, res, next) {
       url: safeUrl.href,
       format: parseFormat(req),
       grayscale: parseBoolean(getQueryString(req, 'bw'), DEFAULT_GRAYSCALE),
-      quality: parseQuality(
-        getFirstQueryString(req, ['l', 'q', 'quality']),
-        baseQuality,
-        MIN_QUALITY,
-        MAX_QUALITY
-      ),
-      maxDim: clampInt(
-        getFirstQueryString(req, ['max_dim', 'maxdim', 'max']),
-        baseMaxDim,
-        0,
-        4096
-      ),
-      maxStripWidth: clampInt(
-        getFirstQueryString(req, ['strip_w', 'stripw', 'strip_width']),
-        baseStripWidth,
-        0,
-        4096
-      ),
+      quality: parseQuality(getFirstQueryString(req, ['l', 'q', 'quality']), baseQuality, MIN_QUALITY, MAX_QUALITY),
+      maxDim: clampInt(getFirstQueryString(req, ['max_dim', 'maxdim', 'max']), baseMaxDim, 0, 4096),
+      maxStripWidth: clampInt(getFirstQueryString(req, ['strip_w', 'stripw', 'strip_width']), baseStripWidth, 0, 4096),
       rotate: parseRotation(getQueryString(req, 'rotate'))
     };
-    
-    // F12-MODIFIED: Normalize mode, raw/bypass treated as auto
+
+    // Normalize mode; raw/bypass are treated as auto
     const rawMode = getQueryString(req, 'mode');
     const modeInput = String(rawMode || '').toLowerCase();
     const mode = ALLOWED_MODES.has(modeInput) ? modeInput : 'auto';
@@ -330,10 +325,7 @@ function params(req, res, next) {
       mode === 'manhua'
     ) {
       sharpenDefault = true;
-    } else if (
-      mode === 'photo' ||
-      mode === 'normal'
-    ) {
+    } else if (mode === 'photo' || mode === 'normal') {
       sharpenDefault = false;
     } else {
       sharpenDefault = undefined;
@@ -345,12 +337,10 @@ function params(req, res, next) {
       req.opts.maxDim = req.opts.maxDim || baseMaxDim;
       req.opts.maxStripWidth = 0;
       if (sharpenQuery === undefined) sharpenQuery = '1';
-
     } else if (mode === 'strip' || mode === 'webtoon' || mode === 'manhwa' || mode === 'manhua') {
       req.opts.maxDim = 0;
       req.opts.maxStripWidth = req.opts.maxStripWidth || baseStripWidth;
       if (sharpenQuery === undefined) sharpenQuery = '1';
-
     } else if (mode === 'photo' || mode === 'normal') {
       req.opts.maxDim = req.opts.maxDim || baseMaxDim;
       req.opts.maxStripWidth = 0;
