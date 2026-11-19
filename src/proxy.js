@@ -21,7 +21,7 @@ const UPSTREAM_TOTAL_DEADLINE_MS = safeInt(process.env.UPSTREAM_TOTAL_DEADLINE_M
 const MAX_RETRIES = safeInt(process.env.UPSTREAM_MAX_RETRIES, 2);
 
 // Corrupt image auto-retry
-const MAX_DECODE_RETRIES = safeInt(process.env.MAX_DECODE_RETRIES, 1);
+const MAX_DECODE_RETRIES = safeInt(process.env.MAX_DECODE_RETRIES, 3);
 const ENABLE_CORRUPT_RETRY = envBoolLocal('ENABLE_CORRUPT_RETRY', true);
 
 function safeInt(value, fallback) {
@@ -222,13 +222,15 @@ function sendGhost(res, cacheSeconds = 3600, hint = null, reason = 'unknown') {
   if (!res.headersSent) {
     res.setHeader('X-Ghost-Reason', reason);
     // Transient failures: answer with a real error status so clients retry instead of saving a blank 1x1 page.
-    const TRANSIENT_STATUS = { upstream_timeout: 504, byte_budget_exceeded: 503, proxy_error: 502 };
+    const TRANSIENT_STATUS = { upstream_timeout: 504, byte_budget_exceeded: 503, proxy_error: 502, corrupt_image: 502 };
     const transientStatus =
       TRANSIENT_STATUS[reason] ||
       (reason === 'upstream_error_429' ? 503 : /^upstream_error_5\d\d$/.test(reason) ? 502 : 0);
     if (transientStatus) {
       res.setHeader('Retry-After', '5');
       res.setHeader('Cache-Control', 'no-store');
+      res.removeHeader('ETag');
+      res.removeHeader('Content-Type');
       return res.status(transientStatus).json({ error: 'Temporary upstream failure', reason });
     }
     // Redirecting the client to the original image is intentionally disabled: it would download uncompressed images.
@@ -297,6 +299,11 @@ function sanitizeError(err) {
   return msg;
 }
 // OBSERVABILITY: safe, redacted, single-line preview of upstream failure bodies.
+function declaredRiffBytes(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 12 || buffer.toString('latin1', 0, 4) !== 'RIFF') return null;
+  return buffer.readUInt32LE(4) + 8;
+}
+
 function bodyPreview(buffer, maxBytes = 64) {
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) return '';
   const slice = buffer.subarray(0, Math.min(maxBytes, buffer.length));
@@ -1040,11 +1047,21 @@ export default async function proxy(req, res) {
       // Corrupt image auto-retry
       if (compressError && ENABLE_CORRUPT_RETRY && isSharpDecodeError(compressError)) {
         res.setHeader('X-Corrupt-Retry', 'TRIGGERED');
-        log.warn({ reqId }, '[CORRUPT RETRY] Decode failure detected, retrying with new UA');
+        log.warn(
+          {
+            reqId,
+            bytes: rawBody.length,
+            declaredBytes: declaredRiffBytes(rawBody),
+            error: sanitizeError(compressError)
+          },
+          '[CORRUPT RETRY] Decode failure detected, retrying with new UA'
+        );
 
         let retrySuccess = false;
 
         for (let attempt = 1; attempt <= MAX_DECODE_RETRIES; attempt++) {
+          // Give an upstream node that is still receiving the file time to finish before fetching again
+          await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
           if (isClientAborted(req)) return;
 
           try {
