@@ -1580,7 +1580,20 @@ export default async function compress(req, res, buffer, governor) {
 
     if (ENABLE_ORACLE_LEDGER) metrics.cacheMisses++;
 
-    if (!memGov.admitPixels(totalPixelCost)) {
+    let pixelsGranted = memGov.admitPixels(totalPixelCost);
+
+    // An animation too large to decode in memory is served as its first frame instead of failing with a 503.
+    if (!pixelsGranted && (metadata.pages || 1) > 1) {
+      frames = 1;
+      metadata = { ...metadata, pages: 1 };
+      totalPixelCost = Math.ceil(
+        Math.max(width * height, (metadata.width || 0) * (metadata.height || 0)) * pixelWeight
+      );
+      res.setHeader('X-Animated-Fallback', 'FIRST_FRAME');
+      pixelsGranted = memGov.admitPixels(totalPixelCost);
+    }
+
+    if (!pixelsGranted) {
       adaptiveDirector.recordRejection({
         format: outputFormat,
         width,
