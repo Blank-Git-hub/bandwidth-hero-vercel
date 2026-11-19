@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write
 
 jobs:
   sync:
@@ -33,6 +34,13 @@ jobs:
             exit 0
           fi
           
+          # If a sync PR is already open, do not create another branch and PR on top of it
+          OPEN_SYNC_BRANCHES="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --base main --limit 100 --json headRefName --jq '.[] | select(.headRefName | startswith("upstream-sync-")) | .headRefName')"
+          if [ -n "$OPEN_SYNC_BRANCHES" ]; then
+            echo "⏸️ A sync PR is already open ($OPEN_SYNC_BRANCHES). Merge or close it first."
+            exit 0
+          fi
+
           # If upstream actually has NEW commits, create a sync branch
           SYNC_BRANCH="upstream-sync-$(date +%s)"
           git checkout -b "$SYNC_BRANCH"
@@ -48,7 +56,13 @@ jobs:
           
           # Open a PR so you can review their new code before it touches your security armor
           gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
             --title "Sync upstream changes" \
             --body "Upstream finally woke up. Review carefully for security conflicts before merging." \
             --base main \
             --head "$SYNC_BRANCH"
+
+          # PRs opened with GITHUB_TOKEN do not start the Tests workflow by themselves, so start it on the sync branch explicitly.
+          gh workflow run test.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$SYNC_BRANCH"

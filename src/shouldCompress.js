@@ -1,9 +1,4 @@
-const EXCLUDED_TYPES = new Set([
-  'image/svg+xml',
-  'application/pdf',
-  'image/x-icon',
-  'image/vnd.microsoft.icon'
-]);
+const EXCLUDED_TYPES = new Set(['application/pdf', 'image/x-icon', 'image/vnd.microsoft.icon']);
 
 export default function shouldCompress(req, buffer, memoryGovernor) {
   const { originType } = req.opts || {};

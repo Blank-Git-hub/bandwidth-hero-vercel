@@ -9,9 +9,11 @@ const logger = pino({
 
 const { LOGIN, PASSWORD, API_KEY, VERCEL_SERVICE_KEY } = process.env;
 
-// F5-MODIFIED: Legacy query auth toggle
+// Query-string API keys are accepted only when ALLOW_QUERY_API_KEY is enabled
 const ALLOW_QUERY_API_KEY = ['1', 'true', 'yes', 'on'].includes(
-  String(process.env.ALLOW_QUERY_API_KEY || 'false').trim().toLowerCase()
+  String(process.env.ALLOW_QUERY_API_KEY || 'false')
+    .trim()
+    .toLowerCase()
 );
 
 if (ALLOW_QUERY_API_KEY && API_KEY) {
@@ -28,24 +30,17 @@ const REQ_RATE_LIMIT_WINDOW_MS = parseInt(process.env.REQ_RATE_LIMIT_WINDOW_MS, 
 const REQ_RATE_LIMIT_MAX = parseInt(process.env.REQ_RATE_LIMIT_MAX, 10) || 1200;
 const REQ_RATE_LIMIT_SCOPE = 'req-success';
 
-// --- ITEM 3: Per-Key Rate Limiting Config ---
+// Per-key rate limiting configuration
 const parsedKeyWindowMs = parseInt(process.env.KEY_RATE_LIMIT_WINDOW_MS, 10);
 const KEY_RATE_LIMIT_WINDOW_MS =
-  Number.isFinite(parsedKeyWindowMs) && parsedKeyWindowMs > 0
-    ? parsedKeyWindowMs
-    : REQ_RATE_LIMIT_WINDOW_MS;
+  Number.isFinite(parsedKeyWindowMs) && parsedKeyWindowMs > 0 ? parsedKeyWindowMs : REQ_RATE_LIMIT_WINDOW_MS;
 
 const parsedKeyMax = parseInt(process.env.KEY_RATE_LIMIT_MAX, 10);
-const KEY_RATE_LIMIT_MAX =
-  Number.isFinite(parsedKeyMax) && parsedKeyMax >= 0
-    ? parsedKeyMax
-    : REQ_RATE_LIMIT_MAX * 10;
+const KEY_RATE_LIMIT_MAX = Number.isFinite(parsedKeyMax) && parsedKeyMax >= 0 ? parsedKeyMax : REQ_RATE_LIMIT_MAX * 10;
 
 const parsedServiceKeyMax = parseInt(process.env.SERVICE_KEY_RATE_LIMIT_MAX, 10);
 const SERVICE_KEY_RATE_LIMIT_MAX =
-Number.isFinite(parsedServiceKeyMax) && parsedServiceKeyMax > 0
-? parsedServiceKeyMax
-: REQ_RATE_LIMIT_MAX * 100;
+  Number.isFinite(parsedServiceKeyMax) && parsedServiceKeyMax > 0 ? parsedServiceKeyMax : REQ_RATE_LIMIT_MAX * 100;
 
 // Rate-limit bucket: IPv4 as-is; IPv6 collapsed to its /64 so one host cannot rotate addresses to dodge limits.
 function clientBucket(ip) {
@@ -63,11 +58,7 @@ function clientBucket(ip) {
 function credentialIdentity(label, secret) {
   if (!secret || typeof secret !== 'string') return null;
 
-  const hash = crypto
-    .createHash('sha256')
-    .update(secret)
-    .digest('hex')
-    .slice(0, 16);
+  const hash = crypto.createHash('sha256').update(secret).digest('hex').slice(0, 16);
 
   return `${label}:${hash}`;
 }
@@ -89,22 +80,25 @@ async function allowKeyRequest(identity, max) {
     return true;
   }
 }
-// -------------------------------------------
 
 async function recordSuccessfulRequest(key) {
   // Success increment and auth-failure reset run concurrently (one round-trip, not two).
   await Promise.all([
-    rateLimiter.increment({
-      scope: REQ_RATE_LIMIT_SCOPE,
-      key,
-      windowMs: REQ_RATE_LIMIT_WINDOW_MS,
-      max: REQ_RATE_LIMIT_MAX
-    }).catch(() => {}),
-    rateLimiter.reset({
-      scope: AUTH_RATE_LIMIT_SCOPE,
-      key,
-      windowMs: AUTH_FAILURE_WINDOW_MS
-    }).catch(() => {})
+    rateLimiter
+      .increment({
+        scope: REQ_RATE_LIMIT_SCOPE,
+        key,
+        windowMs: REQ_RATE_LIMIT_WINDOW_MS,
+        max: REQ_RATE_LIMIT_MAX
+      })
+      .catch(() => {}),
+    rateLimiter
+      .reset({
+        scope: AUTH_RATE_LIMIT_SCOPE,
+        key,
+        windowMs: AUTH_FAILURE_WINDOW_MS
+      })
+      .catch(() => {})
   ]);
 }
 
@@ -122,12 +116,14 @@ async function isRequestRateLimited(key) {
 }
 
 async function recordAuthFailure(key) {
-  await rateLimiter.increment({
-    scope: AUTH_RATE_LIMIT_SCOPE,
-    key,
-    windowMs: AUTH_FAILURE_WINDOW_MS,
-    max: AUTH_FAILURE_MAX
-  }).catch(() => {});
+  await rateLimiter
+    .increment({
+      scope: AUTH_RATE_LIMIT_SCOPE,
+      key,
+      windowMs: AUTH_FAILURE_WINDOW_MS,
+      max: AUTH_FAILURE_MAX
+    })
+    .catch(() => {});
 }
 
 async function isAuthRateLimited(key) {
@@ -176,6 +172,30 @@ function safeCompare(a, b) {
   return crypto.timingSafeEqual(hashA, hashB);
 }
 
+// True when the request carries a correct credential. A locked-out IP may still use a correct key:
+// the failure limiter exists to slow guessing, not to lock out the real owner (e.g. behind a shared carrier IP).
+function hasValidCredential(req) {
+  const headerKey = req.headers['x-api-key'];
+  if (API_KEY && headerKey && safeCompare(headerKey, API_KEY)) return true;
+
+  if (ALLOW_QUERY_API_KEY && API_KEY) {
+    let queryKey = req.query.api || req.query.apikey || req.query.api_key;
+    if (typeof queryKey === 'string') {
+      queryKey = queryKey.split(/[\/\?]/)[0].trim();
+    }
+    if (queryKey && safeCompare(String(queryKey), API_KEY)) return true;
+  }
+
+  if (LOGIN && PASSWORD) {
+    const credentials = parseBasicAuth(req);
+    if (credentials && safeCompare(credentials.name, LOGIN) && safeCompare(credentials.pass, PASSWORD)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export default async function authenticate(req, res, next) {
   if (!LOGIN && !PASSWORD && !API_KEY && !VERCEL_SERVICE_KEY) {
     const log = req.log || logger;
@@ -187,18 +207,18 @@ export default async function authenticate(req, res, next) {
     });
   }
 
-  // F5-MODIFIED: Prevent referer leakage of query keys
+  // Prevent query-string keys from leaking through the Referer header
   res.setHeader('Referrer-Policy', 'no-referrer');
 
-  // F6: Rate limit auth failures by IP to prevent bucket-churning via rotating fake keys.
+  // Rate limit auth failures by IP to prevent bucket churning via rotating fake keys.
   const clientIp = req.ip || req.socket?.remoteAddress || 'unknown';
   const clientKey = `ip:${clientBucket(clientIp)}`;
 
-    // 0. Detect Internal Service Key (from Cloudflare Worker - F10 FIX)
+  // 0. Detect the internal service key (sent by the Cloudflare Worker)
   const serviceKey = req.headers['x-vercel-service-key'];
   const isServiceCall = Boolean(VERCEL_SERVICE_KEY && serviceKey && safeCompare(serviceKey, VERCEL_SERVICE_KEY));
 
-  // F6 + Item 9: peek both limiters in parallel (one round-trip instead of two).
+  // Peek both limiters in parallel (one round-trip instead of two).
   // Service calls arrive from the worker's shared egress IP and are limited per credential below,
   // so the per-IP success limiter is skipped for them.
   const [authLimited, reqLimited] = await Promise.all([
@@ -206,7 +226,7 @@ export default async function authenticate(req, res, next) {
     isServiceCall ? Promise.resolve(false) : isRequestRateLimited(clientKey)
   ]);
 
-  if (authLimited) {
+  if (authLimited && !hasValidCredential(req)) {
     return res.status(429).json({ error: 'Too many authentication failures. Try again later.' });
   }
 
@@ -216,8 +236,8 @@ export default async function authenticate(req, res, next) {
   }
 
   if (isServiceCall) {
-req.authVia = 'service';
-const serviceIdentity = credentialIdentity('svc', VERCEL_SERVICE_KEY);
+    req.authVia = 'service';
+    const serviceIdentity = credentialIdentity('svc', VERCEL_SERVICE_KEY);
 
     if (!(await allowKeyRequest(serviceIdentity, SERVICE_KEY_RATE_LIMIT_MAX))) {
       res.setHeader('Retry-After', String(Math.ceil(KEY_RATE_LIMIT_WINDOW_MS / 1000)));
@@ -244,11 +264,11 @@ const serviceIdentity = credentialIdentity('svc', VERCEL_SERVICE_KEY);
     }
 
     await clearAuthFailure(clientKey);
-await recordSuccessfulRequest(clientKey);
-return next();
-}
+    await recordSuccessfulRequest(clientKey);
+    return next();
+  }
 
-  // 2. Check Query String API Key (F5-MODIFIED: legacy support)
+  // 2. Check query-string API key (legacy)
   if (ALLOW_QUERY_API_KEY) {
     let queryKey = req.query.api || req.query.apikey || req.query.api_key;
     if (typeof queryKey === 'string') {
@@ -266,19 +286,15 @@ return next();
       }
 
       await clearAuthFailure(clientKey);
-await recordSuccessfulRequest(clientKey);
-return next();
-}
+      await recordSuccessfulRequest(clientKey);
+      return next();
+    }
   }
 
   // 3. Check Basic Auth
   if (LOGIN && PASSWORD) {
     const credentials = parseBasicAuth(req);
-    if (
-      credentials &&
-      safeCompare(credentials.name, LOGIN) &&
-      safeCompare(credentials.pass, PASSWORD)
-    ) {
+    if (credentials && safeCompare(credentials.name, LOGIN) && safeCompare(credentials.pass, PASSWORD)) {
       const basicIdentity = credentialIdentity('basic', `${credentials.name}:${credentials.pass}`);
 
       if (!(await allowKeyRequest(basicIdentity, KEY_RATE_LIMIT_MAX))) {
@@ -289,9 +305,9 @@ return next();
       }
 
       await clearAuthFailure(clientKey);
-await recordSuccessfulRequest(clientKey);
-return next();
-}
+      await recordSuccessfulRequest(clientKey);
+      return next();
+    }
   }
 
   // 4. Deny access
@@ -302,4 +318,4 @@ return next();
   }
 
   return res.status(401).json({ error: 'Access denied. Provide valid Basic Auth or x-api-key header.' });
-    }
+}

@@ -33,7 +33,7 @@ const RSS_ADMISSION_OFFSET_MB = safeInt(process.env.RSS_ADMISSION_OFFSET_MB, 60)
 const PIXEL_MEMORY_DIVISOR = safeInt(process.env.PIXEL_MEMORY_DIVISOR, 6);
 
 let DOWNLOAD_BYTE_RATIO = safeFloat(process.env.DOWNLOAD_BYTE_RATIO, 0.35);
-let DECOMPRESS_BYTE_RATIO = safeFloat(process.env.DECOMPRESS_BYTE_RATIO, 0.50);
+let DECOMPRESS_BYTE_RATIO = safeFloat(process.env.DECOMPRESS_BYTE_RATIO, 0.5);
 
 DOWNLOAD_BYTE_RATIO = Math.min(Math.max(DOWNLOAD_BYTE_RATIO, 0.01), 0.95);
 DECOMPRESS_BYTE_RATIO = Math.min(Math.max(DECOMPRESS_BYTE_RATIO, 0.01), 0.95);
@@ -127,7 +127,7 @@ function isUnderPressure() {
 }
 
 function isCritical() {
-  return getRssMB() > (MEMORY_CEILING_MB - 10);
+  return getRssMB() > MEMORY_CEILING_MB - 10;
 }
 
 function getActivePixelCost() {

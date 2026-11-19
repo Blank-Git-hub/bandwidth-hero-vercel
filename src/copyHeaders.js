@@ -1,10 +1,4 @@
-const ALLOWED_HEADERS = new Set([
-  'content-type',
-  'cache-control',
-  'etag',
-  'last-modified',
-  'expires'
-]);
+const ALLOWED_HEADERS = new Set(['content-type', 'cache-control', 'etag', 'last-modified', 'expires']);
 
 export default function copyHeaders(response, res) {
   if (!response?.headers) return;

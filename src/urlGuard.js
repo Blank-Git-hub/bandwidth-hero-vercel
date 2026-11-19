@@ -9,21 +9,15 @@ const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
 // (Fetch "bad ports") plus common databases/admin services. Normal and custom web ports stay allowed.
 const BLOCKED_PORTS = new Set(
   [
-    1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95,
-    101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161,
-    179, 389, 427, 445, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556,
-    563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 2375, 2376, 3306,
-    3389, 3659, 4045, 4190, 5060, 5061, 5432, 5900, 6000, 6379, 6566, 6665, 6666, 6667,
-    6668, 6669, 6679, 6697, 9200, 10080, 11211, 27017
+    1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102, 103, 104, 109, 110,
+    111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 445, 465, 512, 513, 514, 515, 526, 530, 531,
+    532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 2375, 2376, 3306, 3389,
+    3659, 4045, 4190, 5060, 5061, 5432, 5900, 6000, 6379, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 9200, 10080,
+    11211, 27017
   ].map(String)
 );
 
-const BLOCKED_HOSTS = new Set([
-  'localhost',
-  '0.0.0.0',
-  '::1',
-  '::'
-]);
+const BLOCKED_HOSTS = new Set(['localhost', '0.0.0.0', '::1', '::']);
 
 const BLOCKED_SUFFIXES = [
   '.local',
@@ -74,7 +68,9 @@ function ssrfError() {
 }
 
 function normalizeHost(hostname) {
-  let host = String(hostname || '').toLowerCase().trim();
+  let host = String(hostname || '')
+    .toLowerCase()
+    .trim();
 
   if (host.startsWith('[') && host.endsWith(']')) {
     host = host.slice(1, -1);
@@ -116,7 +112,7 @@ export function isPublicIP(ip) {
       addr = addr.toIPv4Address();
     }
 
-        if (addr.kind() === 'ipv6') {
+    if (addr.kind() === 'ipv6') {
       const lower = addr.toString().toLowerCase();
 
       // IPv4-compatible ::/96 (deprecated; e.g. ::7f00:1, ::a00:1)
@@ -199,7 +195,7 @@ export function parseSafeUrl(input) {
   if (!host) return null;
   if (BLOCKED_HOSTS.has(host)) return null;
 
-  if (BLOCKED_SUFFIXES.some(suffix => host.endsWith(suffix))) {
+  if (BLOCKED_SUFFIXES.some((suffix) => host.endsWith(suffix))) {
     return null;
   }
 
@@ -229,7 +225,7 @@ export function safeLookup(hostname, options, callback) {
     return callback(ssrfError());
   }
 
-  if (BLOCKED_SUFFIXES.some(suffix => host.endsWith(suffix))) {
+  if (BLOCKED_SUFFIXES.some((suffix) => host.endsWith(suffix))) {
     return callback(ssrfError());
   }
 
@@ -255,8 +251,8 @@ export function safeLookup(hostname, options, callback) {
   if (cached) {
     let addresses = cached.slice();
 
-    if (family === 4) addresses = addresses.filter(a => a.family === 4);
-    if (family === 6) addresses = addresses.filter(a => a.family === 6);
+    if (family === 4) addresses = addresses.filter((a) => a.family === 4);
+    if (family === 6) addresses = addresses.filter((a) => a.family === 6);
 
     if (!addresses.length) return callback(ssrfError());
 
@@ -314,7 +310,7 @@ export function safeLookup(hostname, options, callback) {
       const chosen = addresses[0];
       return callback(null, chosen.address, chosen.family);
     })
-    .catch(err => {
+    .catch((err) => {
       callback(err);
     });
-          }
+}

@@ -69,28 +69,28 @@ const ANALYSIS_MAX_DIM = safeInt(process.env.ANALYSIS_MAX_DIM, 4096);
 const ANALYSIS_MAX_PIXELS = safeInt(process.env.ANALYSIS_MAX_PIXELS, 16_000_000);
 const FULL_STATS_MAX_PIXELS = safeInt(process.env.FULL_STATS_MAX_PIXELS, 40_000_000);
 
-// FEATURE: CPU/event-loop pressure governor
+// CPU/event-loop pressure governor
 const CPU_LAG_THRESHOLD_MS = safeInt(process.env.CPU_LAG_THRESHOLD_MS, 80);
 const EVENT_LOOP_MAX_MS = safeInt(process.env.ADAPTIVE_EVENT_LOOP_MAX_MS, CPU_LAG_THRESHOLD_MS);
 
-// FEATURE: HDR/wide-gamut safe downconversion
+// HDR/wide-gamut safe downconversion
 const ENABLE_HDR_SAFE_CONVERSION = envBool('ENABLE_HDR_SAFE_CONVERSION', true);
 
-// FEATURE: Text/OCR Region Preservation
+// Text/OCR Region Preservation
 const ENABLE_TEXT_PRESERVATION = envBool('ENABLE_TEXT_PRESERVATION', true);
 const TEXT_SHARPNESS_THRESHOLD = safeInt(process.env.TEXT_SHARPNESS_THRESHOLD, 55);
 const TEXT_ENTROPY_MAX = safeFloat(process.env.TEXT_ENTROPY_MAX, 6.0);
 const TEXT_QUALITY_BOOST = safeInt(process.env.TEXT_QUALITY_BOOST, 15);
 
-// FEATURE: Smart Alpha Channel Trimming
+// Smart Alpha Channel Trimming
 const ENABLE_ALPHA_TRIM = envBool('ENABLE_ALPHA_TRIM', true);
 const ALPHA_TRIM_MAX_PIXELS = safeInt(process.env.ALPHA_TRIM_MAX_PIXELS, 8_000_000);
 
-// FEATURE: Animated Frame Dropping
+// Animated Frame Dropping
 const ENABLE_FRAME_DROPPING = envBool('ENABLE_FRAME_DROPPING', false);
 const FRAME_DROP_THRESHOLD = safeInt(process.env.FRAME_DROP_THRESHOLD, 50);
 
-// FEATURE: Safe Metadata Exceptions
+// Safe Metadata Exceptions
 const ENABLE_SAFE_METADATA = envBool('ENABLE_SAFE_METADATA', true);
 
 const metrics = {
@@ -136,13 +136,11 @@ function recordMetric(key, value = 1) {
 
 export function getMetrics() {
   const uptime = Date.now() - metrics.startTime;
-  const avgEncodeTime = metrics.encodeCount > 0
-    ? Math.round(metrics.totalEncodeTime / metrics.encodeCount) : 0;
-  const cacheHitRate = metrics.totalRequests > 0
-    ? ((metrics.cacheHits / metrics.totalRequests) * 100).toFixed(2) + '%' : '0%';
-  const compressionRatio = metrics.totalBytesIn > 0
-    ? ((1 - metrics.totalBytesOut / metrics.totalBytesIn) * 100).toFixed(2) + '%' : '0%';
-
+  const avgEncodeTime = metrics.encodeCount > 0 ? Math.round(metrics.totalEncodeTime / metrics.encodeCount) : 0;
+  const cacheHitRate =
+    metrics.totalRequests > 0 ? ((metrics.cacheHits / metrics.totalRequests) * 100).toFixed(2) + '%' : '0%';
+  const compressionRatio =
+    metrics.totalBytesIn > 0 ? ((1 - metrics.totalBytesOut / metrics.totalBytesIn) * 100).toFixed(2) + '%' : '0%';
 
   return {
     uptime: `${Math.floor(uptime / 1000)}s`,
@@ -206,19 +204,22 @@ export function checkHealth() {
 function gracefulShutdown(signal) {
   if (isShuttingDown) return;
 
-  console.warn({
-    event: 'GRACEFUL_SHUTDOWN',
-    signal,
-    activeRequests,
-    activeEncodes,
-    rssMB: memoryGovernor.getRssMB(),
-    uptimeSec: Math.floor(process.uptime())
-  }, '[SHUTDOWN] Instance shutdown requested');
+  console.warn(
+    {
+      event: 'GRACEFUL_SHUTDOWN',
+      signal,
+      activeRequests,
+      activeEncodes,
+      rssMB: memoryGovernor.getRssMB(),
+      uptimeSec: Math.floor(process.uptime())
+    },
+    '[SHUTDOWN] Instance shutdown requested'
+  );
 
   isShuttingDown = true;
   const forceTimeout = setTimeout(() => process.exit(1), SHUTDOWN_TIMEOUT);
   const checkInterval = setInterval(() => {
-    if (activeRequests === 0 && activeEncodes === 0) {
+    if (activeRequests === 0 && activeEncodes === 0 && inflight.current() === 0) {
       clearTimeout(forceTimeout);
       clearInterval(checkInterval);
       process.exit(0);
@@ -259,30 +260,39 @@ setInterval(async () => {
   const rssMB = memoryGovernor.getRssMB();
 
   const tmpLow = tmpFreeMB >= 0 && tmpFreeMB < 64;
-    const rssHigh = rssMB >= memoryGovernor.RSS_ADMISSION_MB;
+  const rssHigh = rssMB >= memoryGovernor.RSS_ADMISSION_MB;
+
+  // A request can arrive while the awaits above are pending; never exit underneath one.
+  if (isShuttingDown || activeRequests > 0 || activeEncodes > 0 || inflight.current() > 0) return;
 
   if (tmpLow || rssHigh) {
-    console.warn({
-      event: 'RESOURCE_SELF_RECYCLE',
-      rssMB,
-      tmpFreeMB,
-      activeRequests,
-      activeEncodes
-    }, '[RESOURCE SELF-RECYCLE] Idle instance resource pressure, exiting gracefully');
+    console.warn(
+      {
+        event: 'RESOURCE_SELF_RECYCLE',
+        rssMB,
+        tmpFreeMB,
+        activeRequests,
+        activeEncodes
+      },
+      '[RESOURCE SELF-RECYCLE] Idle instance resource pressure, exiting gracefully'
+    );
 
     process.exit(0);
   }
 }, 10000).unref();
 
 process.on('exit', (code) => {
-  console.warn({
-    event: 'PROCESS_EXIT',
-    code,
-    activeRequests,
-    activeEncodes,
-    rssMB: memoryGovernor.getRssMB(),
-    uptimeSec: Math.floor(process.uptime())
-  }, '[PROCESS EXIT]');
+  console.warn(
+    {
+      event: 'PROCESS_EXIT',
+      code,
+      activeRequests,
+      activeEncodes,
+      rssMB: memoryGovernor.getRssMB(),
+      uptimeSec: Math.floor(process.uptime())
+    },
+    '[PROCESS EXIT]'
+  );
 });
 
 const EXACT_CACHE_MAX_ENTRIES = safeInt(process.env.EXACT_CACHE_MAX_ENTRIES, 30);
@@ -329,7 +339,7 @@ function parseTriState(value, defaultValue) {
 }
 
 // ============================================================
-// FEATURE: CPU/event-loop pressure governor helper
+// CPU/event-loop pressure governor helper
 // ============================================================
 async function measureEventLoopLag() {
   return new Promise((resolve) => {
@@ -367,7 +377,7 @@ function computeAdaptivePressure({ eventLoopLag, activeEncodes, encodeLimit, mem
 }
 
 // ============================================================
-// FEATURE: Smart Alpha Channel Trimming helper
+// Smart Alpha Channel Trimming helper
 // ============================================================
 async function detectAlphaBounds(buffer, metadata) {
   if (!metadata.hasAlpha) return null;
@@ -387,36 +397,39 @@ async function detectAlphaBounds(buffer, metadata) {
     const channels = info.channels;
     const alphaIdx = channels - 1;
 
-    let minX = w, minY = h, maxX = 0, maxY = 0;
-let foundOpaque = false;
-let fullBounds = false;
-let idx = alphaIdx;
+    let minX = w,
+      minY = h,
+      maxX = 0,
+      maxY = 0;
+    let foundOpaque = false;
+    let fullBounds = false;
+    let idx = alphaIdx;
 
-for (let y = 0; y < h; y++) {
-  for (let x = 0; x < w; x++, idx += channels) {
-    if (data[idx] > 0) {
-      foundOpaque = true;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++, idx += channels) {
+        if (data[idx] > 0) {
+          foundOpaque = true;
 
-      if (x < minX) minX = x;
-      if (x > maxX) maxX = x;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
 
-      // If opaque pixels touch all four sampled edges, bounds cannot expand further.
-      if (minX === 0 && minY === 0 && maxX === w - 1 && maxY === h - 1) {
-        fullBounds = true;
-        break;
+          // If opaque pixels touch all four sampled edges, bounds cannot expand further.
+          if (minX === 0 && minY === 0 && maxX === w - 1 && maxY === h - 1) {
+            fullBounds = true;
+            break;
+          }
+        }
       }
-    }
-  }
 
-  if (fullBounds) break;
-}
+      if (fullBounds) break;
+    }
 
     if (!foundOpaque) return null;
     if (minX >= maxX || minY >= maxY) return null;
 
-    // Check if trim would save meaningful space (at least 5% on any side)
+    // Check if trim would save meaningful space (at least 2% on any side)
     const trimLeft = minX / w;
     const trimTop = minY / h;
     const trimRight = (w - 1 - maxX) / w;
@@ -447,7 +460,7 @@ for (let y = 0; y < h; y++) {
 }
 
 // ============================================================
-// FEATURE: Text/OCR detection helper
+// Text/OCR detection helper
 // ============================================================
 function isTextHeavyImage(analysis) {
   if (!analysis) return false;
@@ -456,13 +469,11 @@ function isTextHeavyImage(analysis) {
   const colorVariance = analysis.colorVariance || 0;
 
   // Text/OCR heuristic: high sharpness, low entropy, low color variance
-  return sharpness > TEXT_SHARPNESS_THRESHOLD &&
-         entropy < TEXT_ENTROPY_MAX &&
-         colorVariance < 40;
+  return sharpness > TEXT_SHARPNESS_THRESHOLD && entropy < TEXT_ENTROPY_MAX && colorVariance < 40;
 }
 
 // ============================================================
-// FEATURE: HDR/wide-gamut detection helper
+// HDR/wide-gamut detection helper
 // ============================================================
 function detectHDRCharacteristics(metadata) {
   const space = (metadata.space || '').toLowerCase();
@@ -480,7 +491,7 @@ function detectHDRCharacteristics(metadata) {
 }
 
 // ============================================================
-// ANALYSIS HELPERS (existing)
+// ANALYSIS HELPERS
 // ============================================================
 async function generatePlaceholderAndPalette(buffer) {
   try {
@@ -491,12 +502,15 @@ async function generatePlaceholderAndPalette(buffer) {
       .toBuffer({ resolveWithObject: true });
 
     const channels = info.channels;
-    let sum = 0, sumSq = 0;
+    let sum = 0,
+      sumSq = 0;
     const pixelCount = data.length / channels;
     const colorCounts = new Map();
 
     for (let i = 0; i < data.length; i += channels) {
-      const r = data[i], g = data[i + 1], b = data[i + 2];
+      const r = data[i],
+        g = data[i + 1],
+        b = data[i + 2];
       const lum = 0.299 * r + 0.587 * g + 0.114 * b;
       sum += lum;
       sumSq += lum * lum;
@@ -517,7 +531,7 @@ async function generatePlaceholderAndPalette(buffer) {
       });
     }
 
-        let placeholder = null;
+    let placeholder = null;
     if (ENABLE_PLACEHOLDER && !isVoid) {
       try {
         const thumbBuffer = await sharp(buffer, { limitInputPixels: 4_000_000 })
@@ -546,7 +560,8 @@ async function detectSkew(buffer) {
       .raw()
       .toBuffer({ resolveWithObject: true });
 
-    const w = info.width, h = info.height;
+    const w = info.width,
+      h = info.height;
     const corners = [data[0], data[w - 1], data[(h - 1) * w], data[h * w - 1]];
     const bgValue = corners.reduce((a, b) => a + b, 0) / 4;
 
@@ -568,6 +583,7 @@ async function detectSkew(buffer) {
     // lines align into distinct rows.
     let bestAngle = 0;
     let bestVariance = 0;
+    const variances = [];
 
     for (let testAngle = -4; testAngle <= 4; testAngle += 0.5) {
       const rad = (testAngle * Math.PI) / 180;
@@ -595,6 +611,7 @@ async function detectSkew(buffer) {
       const mean = projection.reduce((a, b) => a + b, 0) / h;
       const variance = projection.reduce((s, v) => s + (v - mean) ** 2, 0) / h;
 
+      variances.push(variance);
       if (variance > bestVariance) {
         bestVariance = variance;
         bestAngle = testAngle;
@@ -603,6 +620,13 @@ async function detectSkew(buffer) {
 
     // Reject if the detected angle is too small to matter
     if (Math.abs(bestAngle) < 0.5) return 0;
+
+    // Reject if there is no real peak: a genuine skew shows a variance maximum strictly inside the search range
+    // (higher than both neighbours). A best angle on the range edge, or on a plateau, means the image has no
+    // dominant line structure, so rotating it would be a guess.
+    const bestIndex = Math.round((bestAngle + 4) / 0.5);
+    if (bestIndex <= 0 || bestIndex >= variances.length - 1) return 0;
+    if (!(variances[bestIndex] > variances[bestIndex - 1] && variances[bestIndex] > variances[bestIndex + 1])) return 0;
 
     return bestAngle;
   } catch {
@@ -614,7 +638,8 @@ let _noiseTilePromise = null;
 function getNoiseTile() {
   if (!_noiseTilePromise) {
     _noiseTilePromise = (async () => {
-      const size = 128, channels = 4;
+      const size = 128,
+        channels = 4;
       const data = Buffer.alloc(size * size * channels);
       for (let i = 0; i < size * size; i++) {
         const noise = Math.floor(Math.random() * 256);
@@ -623,7 +648,9 @@ function getNoiseTile() {
         data[i * channels + 2] = noise;
         data[i * channels + 3] = 6;
       }
-      return sharp(data, { raw: { width: size, height: size, channels } }).png().toBuffer();
+      return sharp(data, { raw: { width: size, height: size, channels } })
+        .png()
+        .toBuffer();
     })();
   }
   return _noiseTilePromise;
@@ -658,10 +685,18 @@ function verifyOutput(buffer, format) {
   if (!buffer || buffer.length < 100) return false;
   switch (format) {
     case 'jpeg':
-      return buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF;
+      return buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
     case 'webp':
-      return buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
-             buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50;
+      return (
+        buffer[0] === 0x52 &&
+        buffer[1] === 0x49 &&
+        buffer[2] === 0x46 &&
+        buffer[3] === 0x46 &&
+        buffer[8] === 0x57 &&
+        buffer[9] === 0x45 &&
+        buffer[10] === 0x42 &&
+        buffer[11] === 0x50
+      );
     case 'avif':
       return buffer[4] === 0x66 && buffer[5] === 0x74 && buffer[6] === 0x79 && buffer[7] === 0x70;
     default:
@@ -673,12 +708,7 @@ function getWebpPreset(analysis, lineArtResult, origW, origH) {
   if (!ENABLE_WEBP_PRESET) return 'default';
 
   // Manga/grayscale line art benefits from the drawing preset.
-  if (
-    analysis.isMangaStrip ||
-    analysis.isMangaPage ||
-    analysis.isMangaWidePage ||
-    analysis.isGrayscale
-  ) {
+  if (analysis.isMangaStrip || analysis.isMangaPage || analysis.isMangaWidePage || analysis.isGrayscale) {
     return 'drawing';
   }
 
@@ -707,17 +737,14 @@ function judgeQuality(analysis, metadata, mode) {
   } else if (explicitPhotoModes.includes(mode)) {
     isMangaContent = false;
   } else {
-    isMangaContent = analysis.isMangaStrip || analysis.isMangaPage ||
-                     analysis.isMangaWidePage;
+    isMangaContent = analysis.isMangaStrip || analysis.isMangaPage || analysis.isMangaWidePage;
   }
 
-  const resolution = isVerticalStrip
-    ? Math.min(width * 2, 3000)
-    : Math.max(width, height);
+  const resolution = isVerticalStrip ? Math.min(width * 2, 3000) : Math.max(width, height);
 
   let score = 0;
 
-  // Sharpness — relaxed thresholds (~30% lower)
+  // Sharpness score
   if (isMangaContent) {
     if (sharpness > 45) score += 35;
     else if (sharpness > 30) score += 30;
@@ -732,14 +759,14 @@ function judgeQuality(analysis, metadata, mode) {
     else if (sharpness > 10) score += 7;
   }
 
-  // Resolution — lowered thresholds
+  // Resolution score
   if (resolution > 1600) score += 25;
   else if (resolution > 1200) score += 20;
   else if (resolution > 800) score += 15;
   else if (resolution > 500) score += 10;
   else if (resolution > 250) score += 5;
 
-  // Entropy — widened acceptable ranges
+  // Entropy score
   if (isMangaContent) {
     if (entropy > 2 && entropy < 7) score += 25;
     else if (entropy > 1.5 && entropy < 8) score += 20;
@@ -752,7 +779,7 @@ function judgeQuality(analysis, metadata, mode) {
     else score += 5;
   }
 
-  // Color variance — penalty removed, bonuses preserved
+  // Color variance score (bonus only; low variance is never penalized)
   if (isMangaContent && analysis.isGrayscale) {
     if (colorVariance < 15) score += 5;
   } else if (colorVariance > 80) {
@@ -762,17 +789,31 @@ function judgeQuality(analysis, metadata, mode) {
   } else if (colorVariance > 20) {
     score += 5;
   }
-  // No negative penalty for low color variance
 
-  // Grade thresholds — shifted down for less punitive grading
+  // Map the total score to a grade and a quality adjustment
   let grade, qualityAdjust;
-  if (score >= 85) { grade = 'S'; qualityAdjust = -15; }
-  else if (score >= 70) { grade = 'A'; qualityAdjust = -10; }
-  else if (score >= 55) { grade = 'B'; qualityAdjust = -5; }
-  else if (score >= 40) { grade = 'C'; qualityAdjust = 0; }
-  else if (score >= 25) { grade = 'D'; qualityAdjust = 5; }
-  else if (score >= 10) { grade = 'E'; qualityAdjust = 10; }
-  else { grade = 'F'; qualityAdjust = 15; }
+  if (score >= 85) {
+    grade = 'S';
+    qualityAdjust = -15;
+  } else if (score >= 70) {
+    grade = 'A';
+    qualityAdjust = -10;
+  } else if (score >= 55) {
+    grade = 'B';
+    qualityAdjust = -5;
+  } else if (score >= 40) {
+    grade = 'C';
+    qualityAdjust = 0;
+  } else if (score >= 25) {
+    grade = 'D';
+    qualityAdjust = 5;
+  } else if (score >= 10) {
+    grade = 'E';
+    qualityAdjust = 10;
+  } else {
+    grade = 'F';
+    qualityAdjust = 15;
+  }
 
   return { grade, qualityAdjust, score };
 }
@@ -780,7 +821,8 @@ function judgeQuality(analysis, metadata, mode) {
 async function detectHalftone(buffer, metadata, analysis) {
   if (analysis.colorVariance > 50) return { isHalftone: false, confidence: 0 };
   try {
-    const width = metadata.width, height = metadata.height;
+    const width = metadata.width,
+      height = metadata.height;
     const sampleSize = Math.min(200, Math.min(width, height));
     if (sampleSize < 32) return { isHalftone: false, confidence: 0 };
 
@@ -793,14 +835,17 @@ async function detectHalftone(buffer, metadata, analysis) {
       .raw()
       .toBuffer({ resolveWithObject: true });
 
-    let microSum = 0, microCount = 0;
+    let microSum = 0,
+      microCount = 0;
     for (let y = 0; y < sampleSize - 2; y += 3) {
       for (let x = 0; x < sampleSize - 2; x += 3) {
-        let sum = 0, sumSq = 0;
+        let sum = 0,
+          sumSq = 0;
         for (let dy = 0; dy < 3; dy++) {
           for (let dx = 0; dx < 3; dx++) {
             const v = data[(y + dy) * sampleSize + (x + dx)];
-            sum += v; sumSq += v * v;
+            sum += v;
+            sumSq += v * v;
           }
         }
         const mean = sum / 9;
@@ -810,15 +855,20 @@ async function detectHalftone(buffer, metadata, analysis) {
     }
     const microVariance = microSum / Math.max(microCount, 1);
 
-    let macroSum = 0, macroCount = 0;
+    let macroSum = 0,
+      macroCount = 0;
     const macroSize = Math.min(24, sampleSize);
     for (let y = 0; y < sampleSize - macroSize + 1; y += macroSize) {
       for (let x = 0; x < sampleSize - macroSize + 1; x += macroSize) {
-        let sum = 0, sumSq = 0, count = 0;
+        let sum = 0,
+          sumSq = 0,
+          count = 0;
         for (let dy = 0; dy < macroSize; dy++) {
           for (let dx = 0; dx < macroSize; dx++) {
             const v = data[(y + dy) * sampleSize + (x + dx)];
-            sum += v; sumSq += v * v; count++;
+            sum += v;
+            sumSq += v * v;
+            count++;
           }
         }
         const mean = sum / count;
@@ -849,7 +899,8 @@ async function detectLineArt(buffer, analysis) {
     for (let i = 0; i < data.length; i++) hist[data[i]]++;
 
     const total = data.length;
-    let darkPeak = 0, lightPeak = 0;
+    let darkPeak = 0,
+      lightPeak = 0;
     for (let i = 0; i <= 80; i++) darkPeak = Math.max(darkPeak, hist[i]);
     for (let i = 175; i <= 255; i++) lightPeak = Math.max(lightPeak, hist[i]);
 
@@ -878,10 +929,7 @@ async function detectImageType(buffer, metadata) {
   let analysisHeight = height;
 
   if (width > ANALYSIS_MAX_DIM || height > ANALYSIS_MAX_DIM) {
-    const scale = Math.min(
-      ANALYSIS_MAX_DIM / Math.max(width, 1),
-      ANALYSIS_MAX_DIM / Math.max(height, 1)
-    );
+    const scale = Math.min(ANALYSIS_MAX_DIM / Math.max(width, 1), ANALYSIS_MAX_DIM / Math.max(height, 1));
     analysisWidth = Math.max(1, Math.round(width * scale));
     analysisHeight = Math.max(1, Math.round(height * scale));
   }
@@ -893,7 +941,7 @@ async function detectImageType(buffer, metadata) {
     analysisHeight = Math.max(1, Math.round(analysisHeight * scale));
   }
 
-    let stats;
+  let stats;
   if (width * height > FULL_STATS_MAX_PIXELS && (analysisWidth < width || analysisHeight < height)) {
     // sharp's .stats() ignores .resize(), so downscale to a raw buffer first; a huge image is never fully decoded
     const { data: analysisData, info: analysisInfo } = await sharp(buffer, { limitInputPixels: 0 })
@@ -908,8 +956,12 @@ async function detectImageType(buffer, metadata) {
   }
   const { channels } = stats;
 
-  let totalEntropy = 0, totalSharpness = 0, colorVariance = 0;
-  let meanLuminance = 128, stdevLuminance = 50, maxLuminance = 255;
+  let totalEntropy = 0,
+    totalSharpness = 0,
+    colorVariance = 0;
+  let meanLuminance = 128,
+    stdevLuminance = 50,
+    maxLuminance = 255;
 
   if (channels && channels.length > 0) {
     meanLuminance = channels[0].mean || 128;
@@ -941,17 +993,26 @@ async function detectImageType(buffer, metadata) {
   const isAnime = isColorful && totalSharpness > 100;
 
   return {
-    isGrayscale, isHighContrast, isColorful,
-    isMangaStrip, isMangaPage, isMangaWidePage, isAnime,
-    entropy: totalEntropy, sharpness: totalSharpness,
-    colorVariance, aspectRatio,
-    meanLuminance, stdevLuminance, maxLuminance
+    isGrayscale,
+    isHighContrast,
+    isColorful,
+    isMangaStrip,
+    isMangaPage,
+    isMangaWidePage,
+    isAnime,
+    entropy: totalEntropy,
+    sharpness: totalSharpness,
+    colorVariance,
+    aspectRatio,
+    meanLuminance,
+    stdevLuminance,
+    maxLuminance
   };
 }
 
 function getViewportMaxDim(req) {
-  const viewportWidth = parseInt(req.headers['sec-ch-viewport-width']) ||
-    parseInt(req.headers['viewport-width']) || VIEWPORT_FALLBACK;
+  const viewportWidth =
+    parseInt(req.headers['sec-ch-viewport-width']) || parseInt(req.headers['viewport-width']) || VIEWPORT_FALLBACK;
   const dpr = parseFloat(req.headers['sec-ch-dpr']) || parseFloat(req.headers['dpr']) || 1;
   const effectiveWidth = Math.round(viewportWidth * dpr);
   return Math.max(320, Math.min(effectiveWidth, MAX_OUTPUT_DIM));
@@ -984,17 +1045,17 @@ function getAvifLimitScale(width, height, totalPixelCost) {
 }
 
 function chooseOutputFormat(metadata, totalPixelCost, requestedFormat = null) {
-if (requestedFormat === 'jpeg') {
-return { format: 'jpeg', reason: 'requested_jpeg' };
-}
-if (requestedFormat === 'webp') {
-return { format: 'webp', reason: 'requested_webp' };
-}
-if (requestedFormat === 'avif' && (metadata.pages || 1) <= 1) {
-return { format: 'avif', reason: 'requested_avif' };
-}
-const isAnimated = (metadata.pages || 1) > 1;
-const format = metadata.format;
+  if (requestedFormat === 'jpeg') {
+    return { format: 'jpeg', reason: 'requested_jpeg' };
+  }
+  if (requestedFormat === 'webp') {
+    return { format: 'webp', reason: 'requested_webp' };
+  }
+  if (requestedFormat === 'avif' && (metadata.pages || 1) <= 1) {
+    return { format: 'avif', reason: 'requested_avif' };
+  }
+  const isAnimated = (metadata.pages || 1) > 1;
+  const format = metadata.format;
 
   if (format === 'gif' || isAnimated) {
     return { format: 'webp', reason: 'animated_or_gif' };
@@ -1045,7 +1106,7 @@ const format = metadata.format;
 }
 
 // ============================================================
-// FEATURE: Animated Frame Splicing (60fps -> <=15fps)
+// Animated frame splicing: reduces high-frame-rate animations to at most about 24 fps (see SPLICE_TARGET_FRAME_MS)
 // Uses sharp's native array join syntax: sharp([buf1, buf2], { join: { animated: true } })
 // ============================================================
 const SPLICE_TARGET_FRAME_MS = safeInt(process.env.SPLICE_TARGET_FRAME_MS, 41);
@@ -1053,7 +1114,10 @@ const SPLICE_MAX_RAW_MB = safeInt(process.env.SPLICE_MAX_RAW_MB, 800);
 
 function computeSpliceStride(delays, frames) {
   if (!Array.isArray(delays) || delays.length === 0 || frames < 2) return 1;
-  const valid = delays.slice(0, frames).map((d) => Number(d)).filter((d) => Number.isFinite(d) && d > 0);
+  const valid = delays
+    .slice(0, frames)
+    .map((d) => Number(d))
+    .filter((d) => Number.isFinite(d) && d > 0);
   if (valid.length === 0) return 1;
   const avgDelay = valid.reduce((sum, d) => sum + d, 0) / valid.length;
   if (avgDelay >= SPLICE_TARGET_FRAME_MS) return 1;
@@ -1072,7 +1136,7 @@ function patchWebpFrameDurations(buffer, delaysMs) {
     const chunkSize = out.readUInt32LE(offset + 4);
     const payloadStart = offset + 8;
     if (fourcc === 'ANMF' && payloadStart + 16 <= out.length && frameIndex < delaysMs.length) {
-      const ms = Math.max(0, Math.min(0xFFFFFF, Math.round(Number(delaysMs[frameIndex]) || 0)));
+      const ms = Math.max(0, Math.min(0xffffff, Math.round(Number(delaysMs[frameIndex]) || 0)));
       out.writeUIntLE(ms, payloadStart + 12, 3);
       frameIndex++;
     }
@@ -1108,8 +1172,11 @@ async function spliceAnimatedFrames(buffer, metadata, log, reqId, deadlineMs = 0
   const estimatedRawMB = Math.ceil((width * pageHeight * frames * 4) / (1024 * 1024));
   if (estimatedRawMB > SPLICE_MAX_RAW_MB) return null;
 
-  // CHUNKED DECODE: Process 16 frames at a time to keep peak RAM under ~50MB
-  const CHUNK_SIZE = 16;
+  // CHUNKED DECODE: size each chunk so its raw RGBA decode stays within a quarter of the memory currently available.
+  const frameRawMB = (width * pageHeight * 4) / (1024 * 1024);
+  const chunkBudgetMB = memoryGovernor.getAvailableMB() * 0.25;
+  if (frameRawMB > chunkBudgetMB) return null;
+  const CHUNK_SIZE = Math.max(1, Math.min(16, Math.floor(chunkBudgetMB / frameRawMB)));
   const frameBuffers = new Array(keptIndices.length).fill(null);
 
   for (let chunkStart = 0; chunkStart < frames; chunkStart += CHUNK_SIZE) {
@@ -1127,7 +1194,10 @@ async function spliceAnimatedFrames(buffer, metadata, log, reqId, deadlineMs = 0
       limitInputPixels: 0,
       page: chunkStart,
       pages: chunkSize
-    }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    })
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
 
     const chunkFrameBytes = info.width * pageHeight * info.channels;
 
@@ -1144,7 +1214,9 @@ async function spliceAnimatedFrames(buffer, metadata, log, reqId, deadlineMs = 0
       const frameRaw = Buffer.from(data.subarray(start, end));
       frameBuffers[k] = await sharp(frameRaw, {
         raw: { width: info.width, height: pageHeight, channels: info.channels }
-      }).webp({ lossless: false, quality: 80, effort: 0 }).toBuffer();
+      })
+        .webp({ lossless: false, quality: 80, effort: 0 })
+        .toBuffer();
     }
     // data goes out of scope here, chunk buffer is released
   }
@@ -1165,7 +1237,7 @@ async function spliceAnimatedFrames(buffer, metadata, log, reqId, deadlineMs = 0
   // Aggressively drop references to help the Garbage Collector
   frameBuffers.length = 0;
 
-  if (ENABLE_ORACLE_LEDGER) metrics.frameDrops += (frames - keptIndices.length);
+  if (ENABLE_ORACLE_LEDGER) metrics.frameDrops += frames - keptIndices.length;
   log.info({ event: 'FRAME_SPLICE', reqId, framesIn: frames, framesOut: keptIndices.length, stride }, '[FRAME-SPLICE]');
 
   return patched;
@@ -1201,7 +1273,7 @@ export default async function compress(req, res, buffer, governor) {
   res.setHeader('X-Adaptive-Active', String(concurrencyGovernor.getActive()));
 
   activeRequests++;
-  
+
   if (ENABLE_ORACLE_LEDGER) {
     metrics.totalRequests++;
     metrics.totalBytesIn += buffer.length;
@@ -1215,20 +1287,17 @@ export default async function compress(req, res, buffer, governor) {
   let phaseStart = Date.now();
 
   const initialDeadline = adaptiveDirector.getEncodeBudget({
-  startedAt: req.proxyStartedAt || startedAt
-});
+    startedAt: req.proxyStartedAt || startedAt
+  });
 
-const hardTimeoutMs = Math.max(
-  250,
-  Math.min(SHARP_HARD_TIMEOUT_MS, Math.floor(initialDeadline.remainingMs))
-);
+  const hardTimeoutMs = Math.max(250, Math.min(SHARP_HARD_TIMEOUT_MS, Math.floor(initialDeadline.remainingMs)));
 
-res.setHeader('X-Sharp-Hard-Timeout', String(hardTimeoutMs));
+  res.setHeader('X-Sharp-Hard-Timeout', String(hardTimeoutMs));
 
-const timeoutHandle = setTimeout(() => {
-  clientDisconnected = true;
-  abortController.abort(new Error('SHARP_HARD_TIMEOUT'));
-}, hardTimeoutMs);
+  const timeoutHandle = setTimeout(() => {
+    clientDisconnected = true;
+    abortController.abort(new Error('SHARP_HARD_TIMEOUT'));
+  }, hardTimeoutMs);
 
   if (ENABLE_TIMEOUT_GUILLOTINE) {
     req.on('close', () => {
@@ -1246,9 +1315,9 @@ const timeoutHandle = setTimeout(() => {
   }
 
   let totalPixelCost = 0;
-let pixelsAdmitted = false;
-let finalEncodeTime = 0;
-let eventLoopLag;
+  let pixelsAdmitted = false;
+  let finalEncodeTime = 0;
+  let eventLoopLag;
 
   try {
     if (signal.aborted) {
@@ -1260,7 +1329,7 @@ let eventLoopLag;
     let metadata = await sharp(buffer).metadata();
     const format = metadata.format;
 
-    if (!format || format === 'raw') return buffer;
+    if (!format || format === 'raw') throw new Error('Input buffer contains unsupported image format');
 
     const mode = req.opts?.mode || 'auto';
     const isPhotoMode = mode === 'photo' || mode === 'normal';
@@ -1272,8 +1341,7 @@ let eventLoopLag;
     let allowLineArtFilters = allowEnhancements && !isPhotoMode;
     let allowPhotoFilters = allowEnhancements && !isMangaMode && !isStripMode;
 
-    // Dimension overlord
-   if (signal.aborted) {
+    if (signal.aborted) {
       res.setHeader('X-Timeout-Guillotine', 'ABORTED');
       res.status(499);
       return Buffer.alloc(0);
@@ -1292,42 +1360,39 @@ let eventLoopLag;
       width = Math.max(1, Math.round(width * scale));
       height = Math.max(1, Math.round(height * scale));
     }
-    
-    const metadataChannels = Math.max(
-  1,
-  Number(metadata.channels) || (metadata.hasAlpha ? 4 : 3)
-);
 
-const metadataDepth = String(metadata.depth || 'uchar').toLowerCase();
+    const metadataChannels = Math.max(1, Number(metadata.channels) || (metadata.hasAlpha ? 4 : 3));
 
-const bytesPerChannel =
-  metadataDepth === 'float' || metadataDepth === 'double'
-    ? 4
-    : metadataDepth === 'ushort' || metadataDepth === 'uint'
-      ? 2
-      : 1;
+    const metadataDepth = String(metadata.depth || 'uchar').toLowerCase();
 
-const bytesPerPixel = Math.max(3, metadataChannels * bytesPerChannel);
-const pixelWeight = Math.max(1, bytesPerPixel / 6);
+    const bytesPerChannel =
+      metadataDepth === 'float' || metadataDepth === 'double'
+        ? 4
+        : metadataDepth === 'ushort' || metadataDepth === 'uint'
+          ? 2
+          : 1;
 
-totalPixelCost = Math.ceil(Math.max(width * height, (metadata.width || 0) * (metadata.height || 0)) * frames * pixelWeight);
+    const bytesPerPixel = Math.max(3, metadataChannels * bytesPerChannel);
+    const pixelWeight = Math.max(1, bytesPerPixel / 6);
+
+    totalPixelCost = Math.ceil(
+      Math.max(width * height, (metadata.width || 0) * (metadata.height || 0)) * frames * pixelWeight
+    );
 
     const formatDecision = chooseOutputFormat(metadata, totalPixelCost, req.opts?.format);
     const outputFormat = formatDecision.format;
 
-    const avifLimitScale = outputFormat === 'avif'
-      ? getAvifLimitScale(width, height, totalPixelCost)
-      : 1;
+    const avifLimitScale = outputFormat === 'avif' ? getAvifLimitScale(width, height, totalPixelCost) : 1;
 
     const avifLimitResize = avifLimitScale < 1;
 
     let logUrl = 'unknown';
- try {
-   const u = new URL(req.opts?.url);
-   logUrl = u.origin + '/*';
- } catch {}
+    try {
+      const u = new URL(req.opts?.url);
+      logUrl = u.origin + '/*';
+    } catch {}
 
-    // Dimension overlord
+    // Reject extreme dimensions (max side 16383 px) and aspect ratios (max 200:1)
     if (ENABLE_DIMENSION_OVERLORD) {
       const MAX_DIMENSION = 16383;
       const MAX_ASPECT_RATIO = 200;
@@ -1335,15 +1400,15 @@ totalPixelCost = Math.ceil(Math.max(width * height, (metadata.width || 0) * (met
       // 1. Check Dimensions
       if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
         log.info({
-       event: 'DIMENSION_OVERLORD_RESIZE',
-       reqId,
-       url: logUrl,
-       mode,
-       width,
-       height,
-       reason: 'RESIZED_DIMENSION',
-       maxDimension: MAX_DIMENSION
-     });
+          event: 'DIMENSION_OVERLORD_RESIZE',
+          reqId,
+          url: logUrl,
+          mode,
+          width,
+          height,
+          reason: 'RESIZED_DIMENSION',
+          maxDimension: MAX_DIMENSION
+        });
         res.setHeader('X-Dimension-Overlord', 'RESIZED_DIMENSION');
       }
 
@@ -1354,16 +1419,16 @@ totalPixelCost = Math.ceil(Math.max(width * height, (metadata.width || 0) * (met
 
       if (aspectRatio > MAX_ASPECT_RATIO) {
         log.info({
-       event: 'DIMENSION_OVERLORD_ASPECT',
-       reqId,
-       url: logUrl,
-       mode,
-       width,
-       height,
-       aspectRatio: Number(aspectRatio.toFixed(2)),
-       reason: 'ASPECT_EXCEEDED',
-       maxAspectRatio: MAX_ASPECT_RATIO
-     });
+          event: 'DIMENSION_OVERLORD_ASPECT',
+          reqId,
+          url: logUrl,
+          mode,
+          width,
+          height,
+          aspectRatio: Number(aspectRatio.toFixed(2)),
+          reason: 'ASPECT_EXCEEDED',
+          maxAspectRatio: MAX_ASPECT_RATIO
+        });
         res.setHeader('X-Dimension-Overlord', 'ASPECT_EXCEEDED');
       }
     }
@@ -1387,20 +1452,22 @@ totalPixelCost = Math.ceil(Math.max(width * height, (metadata.width || 0) * (met
       pixelBudget: memGov.getPixelBudget(),
       activePixelCost: memGov.getActivePixelCost()
     });
-    
-    const viewportCacheKey = req.opts?.maxDim > 0
-  ? 'md-fixed'
-  : `vp-${getViewportMaxDim(req)}`;
 
-const minSizePreference = parseTriState(req.query?.minsize, false);
-const paramFingerprint = [
-  outputFormat, req.opts?.quality, req.opts?.grayscale,
-  req.opts?.maxDim, req.opts?.maxStripWidth, mode,
-  sharpenPreference === undefined ? '' : String(sharpenPreference),
-  String(minSizePreference),
-  req.opts?.rotate || 0,
-  viewportCacheKey
-].join('|');
+    const viewportCacheKey = req.opts?.maxDim > 0 ? 'md-fixed' : `vp-${getViewportMaxDim(req)}`;
+
+    const minSizePreference = parseTriState(req.query?.minsize, false);
+    const paramFingerprint = [
+      outputFormat,
+      req.opts?.quality,
+      req.opts?.grayscale,
+      req.opts?.maxDim,
+      req.opts?.maxStripWidth,
+      mode,
+      sharpenPreference === undefined ? '' : String(sharpenPreference),
+      String(minSizePreference),
+      req.opts?.rotate || 0,
+      viewportCacheKey
+    ].join('|');
 
     const exactHash = await generateExactHash(buffer);
     const exactKey = exactHash ? `${exactHash}:${paramFingerprint}` : null;
@@ -1421,64 +1488,76 @@ const paramFingerprint = [
           metrics.totalBytesSaved += buffer.length - exactHit.buffer.length;
         }
         return exactHit.buffer;
+      }
     }
-  }
 
     // STEP 1: Frame Splicing (TIME-BUDGET GATED)
-// JS splicing is expensive (per-frame decode + re-encode). Only run it when the
-// native encode of ALL frames would exceed the time budget. Small/medium animations
-// encode natively in seconds and must NOT be slowed down by the splicer.
-const isAnimated = (metadata.pages || 1) > 1;
-let shouldSplice = false;
-if (isAnimated && ENABLE_FRAME_DROPPING) {
-  const fullEncodePrediction = adaptiveDirector.predictEncodeMs({
-    format: outputFormat,
-    width,
-    height,
-    frames,
-    pixelCost: totalPixelCost,
-    inputFormat: req.opts?.originType || 'image/webp',
-    effort: 0,
-    pressure: 1
-  });
-  // Force splice if frames > 120 to prevent massive spatial shrinking.
-  shouldSplice = fullEncodePrediction > (hardTimeoutMs * 0.5) || frames > 120;
-  res.setHeader('X-Splice-Gate', shouldSplice
-    ? `SPLICE_PREDICTED_${Math.round(fullEncodePrediction)}ms`
-    : `SKIP_PREDICTED_${Math.round(fullEncodePrediction)}ms`);
-}
-if (shouldSplice) {
-try {
-    const preSpliceFrames = metadata.pages || 1;
-    const splicedBuffer = await spliceAnimatedFrames(buffer, metadata, log, reqId, startedAt + Math.floor(hardTimeoutMs * 0.25));
-    if (splicedBuffer && splicedBuffer.length > 0) {
-      buffer = splicedBuffer;
-      metadata = await sharp(buffer).metadata();
-      frames = metadata.pages || 1;
-      totalPixelCost = Math.ceil(width * height * frames * pixelWeight);
-      res.setHeader('X-Frame-Splice', `${preSpliceFrames}->${frames}`);
+    // JS splicing is expensive (per-frame decode + re-encode). Only run it when the
+    // native encode of ALL frames would exceed the time budget. Small/medium animations
+    // encode natively in seconds and must NOT be slowed down by the splicer.
+    const isAnimated = (metadata.pages || 1) > 1;
+    let shouldSplice = false;
+    if (isAnimated && ENABLE_FRAME_DROPPING) {
+      const fullEncodePrediction = adaptiveDirector.predictEncodeMs({
+        format: outputFormat,
+        width,
+        height,
+        frames,
+        pixelCost: totalPixelCost,
+        inputFormat: req.opts?.originType || 'image/webp',
+        effort: 0,
+        pressure: 1
+      });
+      // Force splice if frames > 120 to prevent massive spatial shrinking.
+      shouldSplice = fullEncodePrediction > hardTimeoutMs * 0.5 || frames > 120;
+      res.setHeader(
+        'X-Splice-Gate',
+        shouldSplice
+          ? `SPLICE_PREDICTED_${Math.round(fullEncodePrediction)}ms`
+          : `SKIP_PREDICTED_${Math.round(fullEncodePrediction)}ms`
+      );
     }
-  } catch (spliceErr) {
-    log.warn({ reqId, error: String(spliceErr?.message || spliceErr).split('?')[0] }, '[FRAME-SPLICE-FALLBACK]');
-  }
-}
+    if (shouldSplice) {
+      try {
+        const preSpliceFrames = metadata.pages || 1;
+        const splicedBuffer = await spliceAnimatedFrames(
+          buffer,
+          metadata,
+          log,
+          reqId,
+          startedAt + Math.floor(hardTimeoutMs * 0.25)
+        );
+        if (splicedBuffer && splicedBuffer.length > 0) {
+          buffer = splicedBuffer;
+          metadata = await sharp(buffer).metadata();
+          frames = metadata.pages || 1;
+          totalPixelCost = Math.ceil(width * height * frames * pixelWeight);
+          res.setHeader('X-Frame-Splice', `${preSpliceFrames}->${frames}`);
+        }
+      } catch (spliceErr) {
+        log.warn({ reqId, error: String(spliceErr?.message || spliceErr).split('?')[0] }, '[FRAME-SPLICE-FALLBACK]');
+      }
+    }
 
-// STEP 2: Recalculate RAM for Native Pipeline based on (potentially spliced) frame count
-const isAnimatedPostSplice = (metadata.pages || 1) > 1;
-const frameHeightPostSplice = metadata.pageHeight || metadata.height;
-const stripHeightPostSplice = frameHeightPostSplice * frames;
-const stripPixelsPostSplice = width * stripHeightPostSplice;
-const requiredStripMBPostSplice = (stripPixelsPostSplice * 4) / (1024 * 1024);
-const availableMB = memGov.getAvailableMB();
-const canNativeAnimate = isAnimatedPostSplice && (requiredStripMBPostSplice <= availableMB);
+    // STEP 2: Recalculate RAM for Native Pipeline based on (potentially spliced) frame count
+    const isAnimatedPostSplice = (metadata.pages || 1) > 1;
+    const frameHeightPostSplice = metadata.pageHeight || metadata.height;
+    const stripHeightPostSplice = frameHeightPostSplice * frames;
+    const stripPixelsPostSplice = width * stripHeightPostSplice;
+    const requiredStripMBPostSplice = (stripPixelsPostSplice * 4) / (1024 * 1024);
+    const availableMB = memGov.getAvailableMB();
+    const canNativeAnimate = isAnimatedPostSplice && requiredStripMBPostSplice <= availableMB;
 
-if (canNativeAnimate) {
-  res.setHeader('X-Animated-Pipeline', 'NATIVE_FULL');
-}
+    if (canNativeAnimate) {
+      res.setHeader('X-Animated-Pipeline', 'NATIVE_FULL');
+    }
 
-  let thumbResult = null;
-        if ((ENABLE_VOID_WATCHER || ENABLE_PALETTE || ENABLE_PLACEHOLDER) && allowEnhancements &&
-        totalPixelCost + memGov.getActivePixelCost() <= memGov.getPixelBudget()) {
+    let thumbResult = null;
+    if (
+      (ENABLE_VOID_WATCHER || ENABLE_PALETTE || ENABLE_PLACEHOLDER) &&
+      allowEnhancements &&
+      totalPixelCost + memGov.getActivePixelCost() <= memGov.getPixelBudget()
+    ) {
       phaseStart = Date.now();
       thumbResult = await generatePlaceholderAndPalette(buffer);
       watchdog.palette = Date.now() - phaseStart;
@@ -1502,28 +1581,28 @@ if (canNativeAnimate) {
     if (ENABLE_ORACLE_LEDGER) metrics.cacheMisses++;
 
     if (!memGov.admitPixels(totalPixelCost)) {
-  adaptiveDirector.recordRejection({
-    format: outputFormat,
-    width,
-    height,
-    frames,
-    pixelCost: totalPixelCost
-  });
+      adaptiveDirector.recordRejection({
+        format: outputFormat,
+        width,
+        height,
+        frames,
+        pixelCost: totalPixelCost
+      });
 
-  res.status(503);
-  res.setHeader('X-Memory-Governor', 'REJECTED');
-  res.setHeader('Retry-After', '5');
-  if (ENABLE_ORACLE_LEDGER) metrics.memoryRejections++;
-  return Buffer.alloc(0);
-}
+      res.status(503);
+      res.setHeader('X-Memory-Governor', 'REJECTED');
+      res.setHeader('Retry-After', '5');
+      if (ENABLE_ORACLE_LEDGER) metrics.memoryRejections++;
+      return Buffer.alloc(0);
+    }
 
-pixelsAdmitted = true;
+    pixelsAdmitted = true;
 
-res.setHeader('X-Memory-Governor', 'ADMITTED');
+    res.setHeader('X-Memory-Governor', 'ADMITTED');
     res.setHeader('X-Pixel-Cost', String(totalPixelCost));
-    
-    // FEATURE: CPU/event-loop pressure governor
-eventLoopLag = await measureEventLoopLag();
+
+    // CPU/event-loop pressure governor
+    eventLoopLag = await measureEventLoopLag();
     const cpuPressure = eventLoopLag > CPU_LAG_THRESHOLD_MS;
 
     res.setHeader('X-CPU-Lag', `${eventLoopLag.toFixed(2)}ms`);
@@ -1548,10 +1627,20 @@ eventLoopLag = await measureEventLoopLag();
         // Under CPU pressure, skip expensive sharp().stats() analysis.
         // All enhancement features are already disabled, so neutral defaults are safe.
         analysis = {
-          isGrayscale: false, isHighContrast: false, isColorful: false,
-          isMangaStrip: false, isMangaPage: false, isMangaWidePage: false, isAnime: false,
-          entropy: 0, sharpness: 0, colorVariance: 0, aspectRatio: 1,
-          meanLuminance: 128, stdevLuminance: 50, maxLuminance: 255
+          isGrayscale: false,
+          isHighContrast: false,
+          isColorful: false,
+          isMangaStrip: false,
+          isMangaPage: false,
+          isMangaWidePage: false,
+          isAnime: false,
+          entropy: 0,
+          sharpness: 0,
+          colorVariance: 0,
+          aspectRatio: 1,
+          meanLuminance: 128,
+          stdevLuminance: 50,
+          maxLuminance: 255
         };
       } else {
         phaseStart = Date.now();
@@ -1567,17 +1656,16 @@ eventLoopLag = await measureEventLoopLag();
         res.setHeader('X-Palette', palette.join(','));
       }
 
-      // FEATURE: Text/OCR Region Preservation detection
+      // Text/OCR Region Preservation detection
       const isTextHeavy = ENABLE_TEXT_PRESERVATION && isTextHeavyImage(analysis);
       if (isTextHeavy) {
         res.setHeader('X-Text-Preservation', 'ACTIVE');
         if (ENABLE_ORACLE_LEDGER) metrics.textPreservations++;
       }
 
-      // FEATURE: HDR/wide-gamut detection
+      // HDR/wide-gamut detection
       const hdrInfo = detectHDRCharacteristics(metadata);
-      const needsHDRConversion = ENABLE_HDR_SAFE_CONVERSION &&
-        (hdrInfo.isWideGamut || hdrInfo.isPotentialHDR);
+      const needsHDRConversion = ENABLE_HDR_SAFE_CONVERSION && (hdrInfo.isWideGamut || hdrInfo.isPotentialHDR);
 
       if (needsHDRConversion) {
         res.setHeader('X-HDR-Conversion', 'ACTIVE');
@@ -1585,7 +1673,7 @@ eventLoopLag = await measureEventLoopLag();
         if (ENABLE_ORACLE_LEDGER) metrics.hdrConversions++;
       }
 
-      // FEATURE: Smart Alpha Channel Trimming detection
+      // Smart Alpha Channel Trimming detection
       let alphaBounds = null;
       if (ENABLE_ALPHA_TRIM && metadata.hasAlpha && !cpuPressure) {
         phaseStart = Date.now();
@@ -1593,18 +1681,32 @@ eventLoopLag = await measureEventLoopLag();
         watchdog.alpha = Date.now() - phaseStart;
         if (alphaBounds) {
           res.setHeader('X-Alpha-Trim', 'ACTIVE');
-          res.setHeader('X-Alpha-Trim-Pad', `${alphaBounds.padLeft},${alphaBounds.padTop},${alphaBounds.padRight},${alphaBounds.padBottom}`);
+          res.setHeader(
+            'X-Alpha-Trim-Pad',
+            `${alphaBounds.padLeft},${alphaBounds.padTop},${alphaBounds.padRight},${alphaBounds.padBottom}`
+          );
           if (ENABLE_ORACLE_LEDGER) metrics.alphaTrims++;
         }
       }
 
-       // Deskew — only for grayscale/scanned document content.
-   // Photos, anime, and colorful content produce false positives.
-   let skewAngle = 0;
-   if (ENABLE_DESKEW && allowEnhancements && analysis.isGrayscale && !isMangaMode && !isStripMode && !analysis.isMangaStrip && !analysis.isMangaPage && !analysis.isMangaWidePage) {
-     phaseStart = Date.now();
-     skewAngle = await detectSkew(buffer);
-     watchdog.skew = Date.now() - phaseStart;
+      // Deskew — only for grayscale/scanned document content.
+      // Photos, anime, and colorful content produce false positives.
+      let skewAngle = 0;
+      if (
+        ENABLE_DESKEW &&
+        allowEnhancements &&
+        (metadata.pages || 1) <= 1 &&
+        analysis.isGrayscale &&
+        !isMangaMode &&
+        !isStripMode &&
+        !analysis.isMangaStrip &&
+        !analysis.isMangaPage &&
+        !analysis.isMangaWidePage &&
+        !req.opts?.rotate
+      ) {
+        phaseStart = Date.now();
+        skewAngle = await detectSkew(buffer);
+        watchdog.skew = Date.now() - phaseStart;
         if (skewAngle !== 0) {
           res.setHeader('X-Deskew-Angle', skewAngle.toFixed(2));
           recordMetric('deskew');
@@ -1625,14 +1727,14 @@ eventLoopLag = await measureEventLoopLag();
       }
 
       // Judge quality — skip for animated content (GIF / animated WebP).
-   // Animated images have inherently low sharpness, limited palettes,
-   // and low entropy. Running the judge on them produces unfairly low
-   // grades (D/E/F) that inflate quality and bloat the output WebP.
-   let judgeResult = null;
-   const isAnimatedForJudge = (metadata.pages || 1) > 1 || metadata.format === 'gif';
-   if (ENABLE_JUDGE && allowEnhancements && !isAnimatedForJudge) {
-     judgeResult = judgeQuality(analysis, metadata, req.opts?.mode);
-   }
+      // Animated images have inherently low sharpness, limited palettes,
+      // and low entropy. Running the judge on them produces unfairly low
+      // grades (D/E/F) that inflate quality and bloat the output WebP.
+      let judgeResult = null;
+      const isAnimatedForJudge = (metadata.pages || 1) > 1 || metadata.format === 'gif';
+      if (ENABLE_JUDGE && allowEnhancements && !isAnimatedForJudge) {
+        judgeResult = judgeQuality(analysis, metadata, req.opts?.mode);
+      }
 
       // Halftone / moire detection
       let halftoneResult = null;
@@ -1678,22 +1780,22 @@ eventLoopLag = await measureEventLoopLag();
       });
 
       const adaptive = adaptiveDirector.chooseEffort({
-      format: outputFormat,
-      width,
-      height,
-      frames,
-      pixelCost: totalPixelCost,
-      inputFormat: req.opts?.originType || 'image/jpeg',
-      budgetMs: budget.budgetMs,
-      pressure: adaptivePressure
-    });
+        format: outputFormat,
+        width,
+        height,
+        frames,
+        pixelCost: totalPixelCost,
+        inputFormat: req.opts?.originType || 'image/jpeg',
+        budgetMs: budget.budgetMs,
+        pressure: adaptivePressure
+      });
 
-    let effort = adaptive.effort;
-    const predictedEncodeMs = adaptive.predictedMs;
-    const risk = adaptive.risk;
-    const bucket = adaptive.bucket;
+      let effort = adaptive.effort;
+      const predictedEncodeMs = adaptive.predictedMs;
+      const risk = adaptive.risk;
+      const bucket = adaptive.bucket;
 
-      // FEATURE: CPU pressure reduces effort
+      // CPU pressure reduces effort
       if (cpuPressure) {
         effort = Math.max(2, effort - 2);
         res.setHeader('X-CPU-Effort-Reduced', 'TRUE');
@@ -1713,7 +1815,7 @@ eventLoopLag = await measureEventLoopLag();
         quality = Math.max(10, Math.min(95, quality + judgeResult.qualityAdjust));
       }
 
-      // FEATURE: Text/OCR quality boost
+      // Text/OCR quality boost
       if (isTextHeavy) {
         quality = Math.min(95, quality + TEXT_QUALITY_BOOST);
         res.setHeader('X-Text-Quality-Boost', `+${TEXT_QUALITY_BOOST}`);
@@ -1726,9 +1828,9 @@ eventLoopLag = await measureEventLoopLag();
       }
 
       // ANIMATION QUALITY FLOOR:
-      // WebP inter-frame prediction catastrophically fails at low quality settings (<40),
-      // producing severe macroblocking (pixilation) and ghosting regardless of effort or tuning.
-      // Enforce a minimum quality of 45 for all animated content.
+      // WebP inter-frame prediction degrades badly at low quality (below about 40), producing
+      // macroblocking and ghosting. The floor is deliberately low (10) to favor smaller files;
+      // raise animFloor to trade size for cleaner animations.
       if (isAnimated) {
         const animFloor = 10;
         if (quality < animFloor) {
@@ -1736,7 +1838,7 @@ eventLoopLag = await measureEventLoopLag();
           quality = animFloor;
         }
       }
-      
+
       const frameCount = metadata.pages || 1;
       if (isAnimated && totalPixelCost > ANIMATED_MAX_PIXELS) {
         res.setHeader('X-Animated-Pixel-Cap', 'REJECTED');
@@ -1765,18 +1867,18 @@ eventLoopLag = await measureEventLoopLag();
       }
 
       // Build Sharp pipeline
-const sharpPixelLimit = Math.max(1, totalPixelCost, memGov.getPixelBudget());
-let pipeline;
-if (canNativeAnimate) {
-pipeline = sharp(buffer, { animated: true, pages: -1, limitInputPixels: stripPixelsPostSplice + 10000 });
-} else {
-pipeline = sharp(buffer, {
-animated: isAnimated,
-limitInputPixels: sharpPixelLimit
-});
-}
+      const sharpPixelLimit = Math.max(1, totalPixelCost, memGov.getPixelBudget());
+      let pipeline;
+      if (canNativeAnimate) {
+        pipeline = sharp(buffer, { animated: true, pages: -1, limitInputPixels: stripPixelsPostSplice + 10000 });
+      } else {
+        pipeline = sharp(buffer, {
+          animated: isAnimated,
+          limitInputPixels: sharpPixelLimit
+        });
+      }
 
-      // FEATURE: Safe Metadata Exceptions
+      // Safe Metadata Exceptions
       if (ENABLE_SAFE_METADATA && ENABLE_METADATA_REAPER) {
         // Keep orientation but strip GPS/sensitive EXIF
         // Sharp's rotate() normalizes orientation from EXIF
@@ -1792,14 +1894,10 @@ limitInputPixels: sharpPixelLimit
 
       pipeline = pipeline.toColourspace('srgb');
 
-      // FEATURE: HDR/wide-gamut safe downconversion
+      // HDR/wide-gamut safe downconversion
       if (needsHDRConversion) {
-        if (hdrInfo.isPotentialHDR) {
-          // Approximate HDR to SDR tone mapping via gamma
-          pipeline = pipeline.gamma(1.0 / 2.2);
-          res.setHeader('X-HDR-ToneMap', 'GAMMA_2.2');
-        }
-        // Wide gamut is handled by toColourspace('srgb') above
+        // 16-bit and ICC sources are already converted to 8-bit sRGB by toColourspace('srgb') above.
+        // No extra tone-mapping is applied: sharp's gamma() only accepts 1.0-3.0.
         res.setHeader('X-HDR-Source-Space', hdrInfo.space);
       }
 
@@ -1811,8 +1909,11 @@ limitInputPixels: sharpPixelLimit
       const userExplicitlyWantsColor = req.opts?.grayscale === false;
       const userExplicitlyWantsBW = req.opts?.grayscale === true;
 
-      if (FORCE_GRAYSCALE || userExplicitlyWantsBW ||
-          (!userExplicitlyWantsColor && analysis.isGrayscale && !analysis.isColorful)) {
+      if (
+        FORCE_GRAYSCALE ||
+        userExplicitlyWantsBW ||
+        (!userExplicitlyWantsColor && analysis.isGrayscale && !analysis.isColorful)
+      ) {
         pipeline = pipeline.grayscale();
       }
 
@@ -1840,16 +1941,14 @@ limitInputPixels: sharpPixelLimit
         }
       }
 
-      // Deskew rotation (negative angle corrects the detected tilt)
+      // Deskew rotation (detectSkew returns the rotation that straightens the page)
       if (ENABLE_DESKEW && allowEnhancements && !isMangaMode && skewAngle !== 0) {
-        pipeline = pipeline.rotate(-skewAngle, {
-          background: analysis.isGrayscale
-            ? { r: 255, g: 255, b: 255 }
-            : { r: 255, g: 255, b: 255, alpha: 0 },
+        pipeline = pipeline.rotate(skewAngle, {
+          background: analysis.isGrayscale ? { r: 255, g: 255, b: 255 } : { r: 255, g: 255, b: 255, alpha: 0 }
         });
       }
-      
-      // FEATURE: Smart Alpha Channel Trimming - apply extract
+
+      // Smart Alpha Channel Trimming - apply extract
       if (alphaBounds) {
         pipeline = pipeline.extract({
           left: alphaBounds.left,
@@ -1861,7 +1960,13 @@ limitInputPixels: sharpPixelLimit
 
       // Moire removal
       // ANIMATION SAFETY: median() per-frame causes temporal flickering and ghosting.
-      if (allowEnhancements && !isAnimated && halftoneResult && halftoneResult.isHalftone && halftoneResult.confidence > 0.85) {
+      if (
+        allowEnhancements &&
+        !isAnimated &&
+        halftoneResult &&
+        halftoneResult.isHalftone &&
+        halftoneResult.confidence > 0.85
+      ) {
         pipeline = pipeline.median(3);
         res.setHeader('X-Moire-Removed', 'true');
         recordMetric('moireRemoval');
@@ -1869,7 +1974,13 @@ limitInputPixels: sharpPixelLimit
 
       // Line denoise
       // ANIMATION SAFETY: median() and sharpen() applied per-frame cause severe temporal flickering.
-      if (allowLineArtFilters && !isAnimated && lineArtResult && lineArtResult.isLineArt && lineArtResult.confidence > 0.85) {
+      if (
+        allowLineArtFilters &&
+        !isAnimated &&
+        lineArtResult &&
+        lineArtResult.isLineArt &&
+        lineArtResult.confidence > 0.85
+      ) {
         pipeline = pipeline.median(3);
         if (sharpenPreference !== false) {
           pipeline = pipeline.sharpen({ sigma: 0.6, flat: 3.0, jagged: 1.5 });
@@ -1879,116 +1990,112 @@ limitInputPixels: sharpPixelLimit
       }
 
       // --- AVIF EFFORT SAFETY FOR MASSIVE STRIPS ---
-// Prevents Vercel 60s hard-kills on tall manhwa strips by reducing libaom CPU effort
-const adaptiveCeiling = adaptiveDirector.getEffortCeiling({
-  format: outputFormat,
-  bucket: adaptive.bucket
-});
+      // Prevents Vercel 60s hard-kills on tall manhwa strips by reducing libaom CPU effort
+      const adaptiveCeiling = adaptiveDirector.getEffortCeiling({
+        format: outputFormat,
+        bucket: adaptive.bucket
+      });
 
-let safeEncodeEffort = Math.min(effort, adaptiveCeiling);
+      let safeEncodeEffort = Math.min(effort, adaptiveCeiling);
 
-if (safeEncodeEffort !== effort) {
-  res.setHeader('X-Adaptive-Ceiling-Applied', String(safeEncodeEffort));
-}
+      if (safeEncodeEffort !== effort) {
+        res.setHeader('X-Adaptive-Ceiling-Applied', String(safeEncodeEffort));
+      }
 
-// --- COMPRESS OR SHRINK WATCHDOG ---
-// If AdaptiveDirector predicts budget_exceeded, force minimum effort.
-// If still over budget, shrink dimensions to fit.
-let watchdogScaleFactor = 1;
+      // --- COMPRESS OR SHRINK WATCHDOG ---
+      // If AdaptiveDirector predicts budget_exceeded, force minimum effort.
+      // If still over budget, shrink dimensions to fit.
+      let watchdogScaleFactor = 1;
 
-if (adaptive.risk === 'budget_exceeded') {
-  safeEncodeEffort = 0;
-  res.setHeader('X-Watchdog', 'EFFORT_FORCED_0');
+      if (adaptive.risk === 'budget_exceeded') {
+        safeEncodeEffort = 0;
+        res.setHeader('X-Watchdog', 'EFFORT_FORCED_0');
 
-  const effortZeroPrediction = adaptiveDirector.predictEncodeMs({
-      format: outputFormat,
-      width,
-      height,
-      frames,
-      pixelCost: totalPixelCost,
-      inputFormat: req.opts?.originType || 'image/jpeg',
-      effort: 0,
-      pressure: adaptivePressure
-    });
-  
-  if (effortZeroPrediction > budget.budgetMs) {
-    // Still over budget. Shrink dimensions to fit.
-    // No extra animated penalty — the sqrt formula already targets the time budget.
-    watchdogScaleFactor = Math.sqrt(budget.budgetMs / effortZeroPrediction);
-    
-    watchdogScaleFactor = Math.max(0.4, Math.min(watchdogScaleFactor, 1));
-res.setHeader('X-Watchdog', `SHRINK_${Math.round(watchdogScaleFactor * 100)}%`);
-// Downscale compensation: a shrunk canvas carries quality more cheaply.
-quality = Math.min(95, quality + 10);
-res.setHeader('X-Shrink-Quality-Boost', '+10');
-  }
-}
+        const effortZeroPrediction = adaptiveDirector.predictEncodeMs({
+          format: outputFormat,
+          width,
+          height,
+          frames,
+          pixelCost: totalPixelCost,
+          inputFormat: req.opts?.originType || 'image/jpeg',
+          effort: 0,
+          pressure: adaptivePressure
+        });
 
-// RISK RECONCILIATION: If the watchdog successfully shrunk the image to fit the budget,
-// the final risk is 'shrunk_to_fit', not the original 'budget_exceeded'.
-let finalRisk = adaptive.risk;
-if (watchdogScaleFactor < 1 && adaptive.risk === 'budget_exceeded') {
-  finalRisk = 'shrunk_to_fit';
-  res.setHeader('X-Adaptive-Risk', 'shrunk_to_fit');
-}
+        if (effortZeroPrediction > budget.budgetMs) {
+          // Still over budget. Shrink dimensions to fit.
+          // No extra animated penalty — the sqrt formula already targets the time budget.
+          watchdogScaleFactor = Math.sqrt(budget.budgetMs / effortZeroPrediction);
+
+          watchdogScaleFactor = Math.max(0.4, Math.min(watchdogScaleFactor, 1));
+          res.setHeader('X-Watchdog', `SHRINK_${Math.round(watchdogScaleFactor * 100)}%`);
+          // Downscale compensation: a shrunk canvas carries quality more cheaply.
+          quality = Math.min(95, quality + 10);
+          res.setHeader('X-Shrink-Quality-Boost', '+10');
+        }
+      }
+
+      // RISK RECONCILIATION: If the watchdog successfully shrunk the image to fit the budget,
+      // the final risk is 'shrunk_to_fit', not the original 'budget_exceeded'.
+      let finalRisk = adaptive.risk;
+      if (watchdogScaleFactor < 1 && adaptive.risk === 'budget_exceeded') {
+        finalRisk = 'shrunk_to_fit';
+        res.setHeader('X-Adaptive-Risk', 'shrunk_to_fit');
+      }
 
       // Resize
-let targetWidth = null;
-let targetHeight = null;
+      let targetWidth = null;
+      let targetHeight = null;
 
-const origW = alphaBounds ? alphaBounds.width : width;
-const origH = alphaBounds ? alphaBounds.height : height;
+      const origW = alphaBounds ? alphaBounds.width : width;
+      const origH = alphaBounds ? alphaBounds.height : height;
 
-const baseW = Math.max(1, Math.round(origW * watchdogScaleFactor));
-const baseH = Math.max(1, Math.round(origH * watchdogScaleFactor));
+      const baseW = Math.max(1, Math.round(origW * watchdogScaleFactor));
+      const baseH = Math.max(1, Math.round(origH * watchdogScaleFactor));
 
-const effectiveStripWidth = (req.opts?.maxStripWidth > 0)
-  ? req.opts.maxStripWidth
-  : MAX_STRIP_WIDTH;
+      const effectiveStripWidth = req.opts?.maxStripWidth > 0 ? req.opts.maxStripWidth : MAX_STRIP_WIDTH;
 
-const effectiveMaxDim = (req.opts?.maxDim > 0)
-  ? req.opts.maxDim
-  : viewportMaxDim;
+      const effectiveMaxDim = req.opts?.maxDim > 0 ? req.opts.maxDim : viewportMaxDim;
 
-if (analysis.isMangaStrip) {
-  if (effectiveStripWidth > 0 && baseW > effectiveStripWidth) {
-    targetWidth = effectiveStripWidth;
-  } else if (watchdogScaleFactor < 1) {
-    targetWidth = baseW;
-    targetHeight = baseH;
-  }
-} else {
-  if (effectiveMaxDim > 0 && (baseW > effectiveMaxDim || baseH > effectiveMaxDim)) {
-    const scale = Math.min(effectiveMaxDim / baseW, effectiveMaxDim / baseH);
-    targetWidth = Math.round(baseW * scale);
-    targetHeight = Math.round(baseH * scale);
-  } else if (watchdogScaleFactor < 1) {
-    targetWidth = baseW;
-    targetHeight = baseH;
-  }
-}
+      if (analysis.isMangaStrip) {
+        if (effectiveStripWidth > 0 && baseW > effectiveStripWidth) {
+          targetWidth = effectiveStripWidth;
+        } else if (watchdogScaleFactor < 1) {
+          targetWidth = baseW;
+          targetHeight = baseH;
+        }
+      } else {
+        if (effectiveMaxDim > 0 && (baseW > effectiveMaxDim || baseH > effectiveMaxDim)) {
+          const scale = Math.min(effectiveMaxDim / baseW, effectiveMaxDim / baseH);
+          targetWidth = Math.round(baseW * scale);
+          targetHeight = Math.round(baseH * scale);
+        } else if (watchdogScaleFactor < 1) {
+          targetWidth = baseW;
+          targetHeight = baseH;
+        }
+      }
 
       // Layout prophet headers
       if (ENABLE_LAYOUT_PROPHET) {
-  let outW = baseW;
-  let outH = baseH;
+        let outW = baseW;
+        let outH = baseH;
 
-  if (targetWidth && targetHeight) {
-    outW = targetWidth;
-    outH = targetHeight;
-  } else if (targetWidth) {
-    outW = targetWidth;
-    outH = Math.round(baseH * (targetWidth / baseW));
-  } else if (targetHeight) {
-    outH = targetHeight;
-    outW = Math.round(baseW * (targetHeight / baseH));
-  }
+        if (targetWidth && targetHeight) {
+          outW = targetWidth;
+          outH = targetHeight;
+        } else if (targetWidth) {
+          outW = targetWidth;
+          outH = Math.round(baseH * (targetWidth / baseW));
+        } else if (targetHeight) {
+          outH = targetHeight;
+          outW = Math.round(baseW * (targetHeight / baseH));
+        }
 
-  res.setHeader('X-Output-Width', String(outW));
-  res.setHeader('X-Output-Height', String(outH));
-  res.setHeader('X-Aspect-Ratio', (outW / Math.max(outH, 1)).toFixed(4));
-  res.setHeader('X-Orientation', outW > outH ? 'landscape' : outH > outW ? 'portrait' : 'square');
-}
+        res.setHeader('X-Output-Width', String(outW));
+        res.setHeader('X-Output-Height', String(outH));
+        res.setHeader('X-Aspect-Ratio', (outW / Math.max(outH, 1)).toFixed(4));
+        res.setHeader('X-Orientation', outW > outH ? 'landscape' : outH > outW ? 'portrait' : 'square');
+      }
 
       // Forced AVIF resize: handle pixel cost, dimension limits, and aspect ratio.
       if (outputFormat === 'avif') {
@@ -2003,16 +2110,13 @@ if (analysis.isMangaStrip) {
 
         // Dimension limit resize.
         if (origW > AVIF_MAX_DIMENSION || origH > AVIF_MAX_DIMENSION) {
-          const dimScale = Math.min(
-            AVIF_MAX_DIMENSION / origW,
-            AVIF_MAX_DIMENSION / origH
-          );
+          const dimScale = Math.min(AVIF_MAX_DIMENSION / origW, AVIF_MAX_DIMENSION / origH);
           if (dimScale < scaleFactor) {
             scaleFactor = dimScale;
             resizeReason = 'DIMENSION';
           }
         }
-        
+
         // Aspect ratio passthrough: extreme ratios cannot be fixed without cropping.
         const currentAspectRatio = Math.max(origW / Math.max(origH, 1), origH / Math.max(origW, 1));
         if (currentAspectRatio > AVIF_MAX_ASPECT_RATIO) {
@@ -2030,20 +2134,26 @@ if (analysis.isMangaStrip) {
         }
       }
 
-   const HARD_MAX_DIM = 16383;
-if (canNativeAnimate) {
-// Native animated: only resize width to preserve strip aspect ratio
-const resizeW = targetWidth || (targetHeight ? Math.round(width * (targetHeight / height)) : Math.min(width, HARD_MAX_DIM));
-pipeline = pipeline.resize({ width: resizeW, withoutEnlargement: true, kernel: sharp.kernel.lanczos3 });
-} else if (targetWidth || targetHeight || (metadata.width || 0) > HARD_MAX_DIM || (metadata.height || 0) > HARD_MAX_DIM) {
-const resizeW = targetWidth || HARD_MAX_DIM;
-const resizeH = targetHeight || HARD_MAX_DIM;
-pipeline = pipeline.resize(resizeW, resizeH, {
-fit: 'inside',
-withoutEnlargement: true,
-kernel: sharp.kernel.lanczos3,
-});
-}
+      const HARD_MAX_DIM = 16383;
+      if (canNativeAnimate) {
+        // Native animated: only resize width to preserve strip aspect ratio
+        const resizeW =
+          targetWidth || (targetHeight ? Math.round(width * (targetHeight / height)) : Math.min(width, HARD_MAX_DIM));
+        pipeline = pipeline.resize({ width: resizeW, withoutEnlargement: true, kernel: sharp.kernel.lanczos3 });
+      } else if (
+        targetWidth ||
+        targetHeight ||
+        (metadata.width || 0) > HARD_MAX_DIM ||
+        (metadata.height || 0) > HARD_MAX_DIM
+      ) {
+        const resizeW = targetWidth || HARD_MAX_DIM;
+        const resizeH = targetHeight || HARD_MAX_DIM;
+        pipeline = pipeline.resize(resizeW, resizeH, {
+          fit: 'inside',
+          withoutEnlargement: true,
+          kernel: sharp.kernel.lanczos3
+        });
+      }
       // Sharpen - boosted for text images and AVIF limit resizes
       // ANIMATION ANTI-PIXILATION:
       // Sharpening before lossy compression injects high-frequency noise that the encoder
@@ -2051,15 +2161,13 @@ kernel: sharp.kernel.lanczos3,
       const contentWantsSharpen =
         sharpenPreference !== false &&
         !isAnimated &&
-        (
-          isTextHeavy ||
+        (isTextHeavy ||
           ((analysis.sharpness < 50 || analysis.isMangaWidePage) && !analysis.isMangaStrip) ||
-          (avifLimitResize && analysis.isMangaStrip)
-        );
+          (avifLimitResize && analysis.isMangaStrip));
 
       if (allowEnhancements && (sharpenPreference === true || contentWantsSharpen)) {
-        const alreadySharpened = allowLineArtFilters && lineArtResult &&
-          lineArtResult.isLineArt && lineArtResult.confidence > 0.85;
+        const alreadySharpened =
+          allowLineArtFilters && lineArtResult && lineArtResult.isLineArt && lineArtResult.confidence > 0.85;
 
         if (!alreadySharpened) {
           const sharpenSigma = isTextHeavy ? 1.0 : 0.8;
@@ -2069,7 +2177,7 @@ kernel: sharp.kernel.lanczos3,
           pipeline = pipeline.sharpen({
             sigma: sharpenSigma,
             flat: sharpenFlat,
-            jagged: sharpenJagged,
+            jagged: sharpenJagged
           });
 
           res.setHeader('X-Sharpen', isTextHeavy ? 'BOOSTED' : 'APPLIED');
@@ -2078,7 +2186,7 @@ kernel: sharp.kernel.lanczos3,
             res.setHeader('X-Text-Sharpen', 'BOOSTED');
           }
         }
-       } 
+      }
 
       // Alpha handling
       if (alphaStrippable) {
@@ -2088,7 +2196,7 @@ kernel: sharp.kernel.lanczos3,
       }
 
       // Banding exorcist
-            const ditherW = targetWidth || (targetHeight ? Math.round(baseW * (targetHeight / baseH)) : baseW);
+      const ditherW = targetWidth || (targetHeight ? Math.round(baseW * (targetHeight / baseH)) : baseW);
       const ditherH = targetHeight || (targetWidth ? Math.round(baseH * (targetWidth / baseW)) : baseH);
       if (bandingExorcistActive && ditherW >= 128 && ditherH >= 128) {
         const noiseTile = await getNoiseTile();
@@ -2105,17 +2213,17 @@ kernel: sharp.kernel.lanczos3,
       // -----------------------------------
       // --------------------------------------------
       // PRE-FLIGHT TIMEOUT GUILLOTINE
-// sharp's C++ pipeline cannot be interrupted by AbortController once started.
-// If the predicted encode time exceeds the hard timeout, bypass to prevent Vercel hard-kill.
-// Skip for native animated pipeline as it is significantly faster than JS frame splicing.
-if (!canNativeAnimate && watchdogScaleFactor === 1 && adaptive.predictedMs > hardTimeoutMs) {
-  res.setHeader('X-Timeout-Guillotine', 'PREDICTED_TIMEOUT_REJECTED');
-  res.status(502);
-  return Buffer.alloc(0);
-}
-   let outputBuffer;
-   let contentType;
-   phaseStart = Date.now();
+      // sharp's C++ pipeline cannot be interrupted by AbortController once started.
+      // If the predicted encode time exceeds the hard timeout, bypass to prevent Vercel hard-kill.
+      // Skip for native animated pipeline as it is significantly faster than JS frame splicing.
+      if (!canNativeAnimate && watchdogScaleFactor === 1 && adaptive.predictedMs > hardTimeoutMs) {
+        res.setHeader('X-Timeout-Guillotine', 'PREDICTED_TIMEOUT_REJECTED');
+        res.status(502);
+        return Buffer.alloc(0);
+      }
+      let outputBuffer;
+      let contentType;
+      phaseStart = Date.now();
       const encodeStart = Date.now();
       let encodeTime = 0;
       // Encode-level adaptive admission with waiting queue
@@ -2123,10 +2231,7 @@ if (!canNativeAnimate && watchdogScaleFactor === 1 && adaptive.predictedMs > har
       const remainingHardMs = Math.max(0, hardTimeoutMs - (encodeWaitStartedAt - startedAt));
       const encodeWaitTimeoutMs = Math.max(
         250,
-        Math.min(
-          Math.max(250, Number(budget.budgetMs) - 500),
-          Math.max(250, remainingHardMs - 500)
-        )
+        Math.min(Math.max(250, Number(budget.budgetMs) - 500), Math.max(250, remainingHardMs - 500))
       );
 
       try {
@@ -2135,7 +2240,17 @@ if (!canNativeAnimate && watchdogScaleFactor === 1 && adaptive.predictedMs > har
           signal
         });
 
-                log.info({ event: 'ENCODE_SLOT', reqId, waitedMs: encodeAdmission.waitedMs, queued: encodeAdmission.queued, elapsedMs: Date.now() - (req.proxyStartedAt || startedAt), predictedMs: predictedEncodeMs }, '[ENCODE SLOT ACQUIRED]');
+        log.info(
+          {
+            event: 'ENCODE_SLOT',
+            reqId,
+            waitedMs: encodeAdmission.waitedMs,
+            queued: encodeAdmission.queued,
+            elapsedMs: Date.now() - (req.proxyStartedAt || startedAt),
+            predictedMs: predictedEncodeMs
+          },
+          '[ENCODE SLOT ACQUIRED]'
+        );
         res.setHeader('X-Adaptive-Encode-Wait', `${encodeAdmission.waitedMs}ms`);
         res.setHeader('X-Adaptive-Encode-Queued', encodeAdmission.queued ? 'TRUE' : 'FALSE');
       } catch (waitErr) {
@@ -2170,7 +2285,7 @@ if (!canNativeAnimate && watchdogScaleFactor === 1 && adaptive.predictedMs > har
         return Buffer.alloc(0);
       }
 
-            // C-003: re-budget after the encode-queue wait
+      // Re-budget after the encode-queue wait
       {
         const postWait = adaptiveDirector.getEncodeBudget({ startedAt: req.proxyStartedAt || startedAt });
         const refit = adaptiveDirector.chooseEffort({
@@ -2202,17 +2317,21 @@ if (!canNativeAnimate && watchdogScaleFactor === 1 && adaptive.predictedMs > har
 
       try {
         if (ENABLE_TIMEOUT_GUILLOTINE) {
-          const onAbort = () => { pipeline.destroy(); };
+          const onAbort = () => {
+            pipeline.destroy();
+          };
           signal.addEventListener('abort', onAbort, { once: true });
 
           try {
             switch (outputFormat) {
               case 'avif':
-                outputBuffer = await pipeline.avif({
-                  quality: Math.min(quality, 63),
-                  effort: Math.min(Math.max(safeEncodeEffort, 0), 9),
-                  chromaSubsampling: getChromaSubsampling(analysis, 'avif'),
-                }).toBuffer();
+                outputBuffer = await pipeline
+                  .avif({
+                    quality: Math.min(quality, 63),
+                    effort: Math.min(Math.max(safeEncodeEffort, 0), 9),
+                    chromaSubsampling: getChromaSubsampling(analysis, 'avif')
+                  })
+                  .toBuffer();
                 contentType = 'image/avif';
                 break;
               case 'webp':
@@ -2221,9 +2340,9 @@ if (!canNativeAnimate && watchdogScaleFactor === 1 && adaptive.predictedMs > har
                   effort: Math.min(Math.max(safeEncodeEffort, 0), 6),
                   smartSubsample: true,
                   preset: getWebpPreset(analysis, lineArtResult, origW, origH),
-                  minSize: parseTriState(req.query?.minsize, false),
+                  minSize: parseTriState(req.query?.minsize, false)
                 };
-                
+
                 // ANIMATION ANTI-GHOSTING & ANTI-PIXILATION:
                 // 1. smartSubsample blurs edges, which the motion estimator smears (ghosting).
                 // 2. Low effort = poor motion vectors (ghosting). Force min 4 for animations.
@@ -2250,21 +2369,26 @@ if (!canNativeAnimate && watchdogScaleFactor === 1 && adaptive.predictedMs > har
                 // Manga/line art tolerates lower quality than photos.
                 // Reduce by 2 for manga strips to squeeze more bytes.
                 let jpegQuality = isExtremeJpeg ? Math.min(quality, 75) : quality;
-                if (!isExtremeJpeg && (analysis.isMangaStrip || analysis.isMangaPage || analysis.isMangaWidePage || analysis.isGrayscale)) {
+                if (
+                  !isExtremeJpeg &&
+                  (analysis.isMangaStrip || analysis.isMangaPage || analysis.isMangaWidePage || analysis.isGrayscale)
+                ) {
                   jpegQuality = Math.max(1, jpegQuality - 2);
                 }
 
                 const jpegChroma = getChromaSubsampling(analysis, 'jpeg');
 
-                outputBuffer = await pipeline.jpeg({
-                  quality: jpegQuality,
-                  progressive: true,
-                  mozjpeg: true,
-                  chromaSubsampling: jpegChroma,
-                  trellisQuantisation: true,
-                  overshootDeringing: true,
-                  optimiseScans: true,
-                }).toBuffer();
+                outputBuffer = await pipeline
+                  .jpeg({
+                    quality: jpegQuality,
+                    progressive: true,
+                    mozjpeg: true,
+                    chromaSubsampling: jpegChroma,
+                    trellisQuantisation: true,
+                    overshootDeringing: true,
+                    optimiseScans: true
+                  })
+                  .toBuffer();
                 contentType = 'image/jpeg';
                 if (isExtremeJpeg) {
                   res.setHeader('X-Extreme-JPEG', 'OPTIMIZED');
@@ -2278,108 +2402,120 @@ if (!canNativeAnimate && watchdogScaleFactor === 1 && adaptive.predictedMs > har
         } else {
           switch (outputFormat) {
             case 'avif':
-              outputBuffer = await pipeline.avif({
-                quality: Math.min(quality, 63),
-                effort: Math.min(Math.max(safeEncodeEffort, 0), 9),
-                chromaSubsampling: getChromaSubsampling(analysis),
-              }).toBuffer();
+              outputBuffer = await pipeline
+                .avif({
+                  quality: Math.min(quality, 63),
+                  effort: Math.min(Math.max(safeEncodeEffort, 0), 9),
+                  chromaSubsampling: getChromaSubsampling(analysis)
+                })
+                .toBuffer();
               contentType = 'image/avif';
               break;
             case 'webp':
-              outputBuffer = await pipeline.webp({
-                quality,
-                effort: Math.min(Math.max(safeEncodeEffort, 0), 6),
-                smartSubsample: true,
-                preset: getWebpPreset(analysis, lineArtResult, origW, origH),
-                  minSize: parseTriState(req.query?.minsize, false),
-                }).toBuffer();
+              outputBuffer = await pipeline
+                .webp({
+                  quality,
+                  effort: Math.min(Math.max(safeEncodeEffort, 0), 6),
+                  smartSubsample: true,
+                  preset: getWebpPreset(analysis, lineArtResult, origW, origH),
+                  minSize: parseTriState(req.query?.minsize, false)
+                })
+                .toBuffer();
               contentType = 'image/webp';
               break;
             case 'jpeg':
-              default:
-                const isExtremeJpeg = width > AVIF_MAX_DIMENSION || height > AVIF_MAX_DIMENSION;
+            default:
+              const isExtremeJpeg = width > AVIF_MAX_DIMENSION || height > AVIF_MAX_DIMENSION;
 
-                let jpegQuality = isExtremeJpeg ? Math.min(quality, 75) : quality;
-                if (!isExtremeJpeg && (analysis.isMangaStrip || analysis.isMangaPage || analysis.isMangaWidePage || analysis.isGrayscale)) {
-                  jpegQuality = Math.max(1, jpegQuality - 2);
-                }
+              let jpegQuality = isExtremeJpeg ? Math.min(quality, 75) : quality;
+              if (
+                !isExtremeJpeg &&
+                (analysis.isMangaStrip || analysis.isMangaPage || analysis.isMangaWidePage || analysis.isGrayscale)
+              ) {
+                jpegQuality = Math.max(1, jpegQuality - 2);
+              }
 
-                const jpegChroma = getChromaSubsampling(analysis, 'jpeg');
+              const jpegChroma = getChromaSubsampling(analysis, 'jpeg');
 
-                outputBuffer = await pipeline.jpeg({
+              outputBuffer = await pipeline
+                .jpeg({
                   quality: jpegQuality,
                   progressive: true,
                   mozjpeg: true,
                   chromaSubsampling: jpegChroma,
                   trellisQuantisation: true,
                   overshootDeringing: true,
-                  optimiseScans: true,
-                }).toBuffer();
-                contentType = 'image/jpeg';
-                if (isExtremeJpeg) {
-                  res.setHeader('X-Extreme-JPEG', 'OPTIMIZED');
-                }
-                res.setHeader('X-Jpeg-Bandwidth-Mode', 'ACTIVE');
-                break;
+                  optimiseScans: true
+                })
+                .toBuffer();
+              contentType = 'image/jpeg';
+              if (isExtremeJpeg) {
+                res.setHeader('X-Extreme-JPEG', 'OPTIMIZED');
+              }
+              res.setHeader('X-Jpeg-Bandwidth-Mode', 'ACTIVE');
+              break;
           }
         }
       } finally {
-     const encodeEnd = Date.now();
-     encodeTime = encodeEnd - encodeStart;
-     finalEncodeTime = encodeTime;
-     watchdog.encode = encodeTime;
+        const encodeEnd = Date.now();
+        encodeTime = encodeEnd - encodeStart;
+        finalEncodeTime = encodeTime;
+        watchdog.encode = encodeTime;
 
-     activeEncodes--;
-     concurrencyGovernor.releaseEncode({
-       success: !clientDisconnected && !signal.aborted,
-       timedOut: signal.aborted,
-       encodeTimeMs: encodeTime
-     });
-   }
+        activeEncodes--;
+        concurrencyGovernor.releaseEncode({
+          success: !clientDisconnected && !signal.aborted,
+          timedOut: signal.aborted,
+          encodeTimeMs: encodeTime
+        });
+      }
 
-   const finalRecordedEffort = typeof safeEncodeEffort !== 'undefined' ? safeEncodeEffort : effort;
-// CALIBRATION INTEGRITY: learn from the pixels we ACTUALLY encoded,
-// not the original pixel cost. Recording shrunk encodes against the
-// original pixels poisons msPerMp stats and corrupts every prediction.
-let recordedW = targetWidth || origW;
-let recordedH = targetHeight || origH;
-// Single-dimension resizes scale the other axis proportionally (fit: 'inside').
-// Record the real output geometry, not the resize box.
-if (targetWidth && !targetHeight) {
-  recordedH = Math.max(1, Math.round(origH * (targetWidth / origW)));
-} else if (targetHeight && !targetWidth) {
-  recordedW = Math.max(1, Math.round(origW * (targetHeight / origH)));
-}
-const recordedPixelCost = Math.ceil(recordedW * recordedH * frames * pixelWeight);
-const calibrationPredictedMs = adaptiveDirector.predictEncodeMs({
-format: outputFormat,
-width: recordedW,
-height: recordedH,
-frames,
-pixelCost: recordedPixelCost,
-inputFormat: req.opts?.originType || 'image/jpeg',
-effort: finalRecordedEffort,
-pressure: adaptivePressure
-});
-adaptiveDirector.recordEncode({
-format: outputFormat,
-width: recordedW,
-height: recordedH,
-frames,
-pixelCost: recordedPixelCost,
-effort: finalRecordedEffort,
-encodeMs: encodeTime,
-predictedMs: calibrationPredictedMs,
-pressure: adaptivePressure,
-success: !clientDisconnected && !signal.aborted,
-timedOut: signal.aborted
-});
+      const finalRecordedEffort = typeof safeEncodeEffort !== 'undefined' ? safeEncodeEffort : effort;
+      // CALIBRATION INTEGRITY: learn from the pixels we ACTUALLY encoded,
+      // not the original pixel cost. Recording shrunk encodes against the
+      // original pixels poisons msPerMp stats and corrupts every prediction.
+      let recordedW = targetWidth || origW;
+      let recordedH = targetHeight || origH;
+      // Single-dimension resizes scale the other axis proportionally (fit: 'inside').
+      // Record the real output geometry, not the resize box.
+      if (targetWidth && !targetHeight) {
+        recordedH = Math.max(1, Math.round(origH * (targetWidth / origW)));
+      } else if (targetHeight && !targetWidth) {
+        recordedW = Math.max(1, Math.round(origW * (targetHeight / origH)));
+      }
+      const recordedPixelCost = Math.ceil(recordedW * recordedH * frames * pixelWeight);
+      const calibrationPredictedMs = adaptiveDirector.predictEncodeMs({
+        format: outputFormat,
+        width: recordedW,
+        height: recordedH,
+        frames,
+        pixelCost: recordedPixelCost,
+        inputFormat: req.opts?.originType || 'image/jpeg',
+        effort: finalRecordedEffort,
+        pressure: adaptivePressure
+      });
+      adaptiveDirector.recordEncode({
+        format: outputFormat,
+        width: recordedW,
+        height: recordedH,
+        frames,
+        pixelCost: recordedPixelCost,
+        effort: finalRecordedEffort,
+        encodeMs: encodeTime,
+        predictedMs: calibrationPredictedMs,
+        pressure: adaptivePressure,
+        success: !clientDisconnected && !signal.aborted,
+        timedOut: signal.aborted
+      });
 
       res.setHeader('X-Processing-Time', `${encodeTime}ms`);
       res.setHeader('X-Adaptive-Actual', `${encodeTime}ms`);
-      res.setHeader('X-Adaptive-Error', calibrationPredictedMs > 0
-        ? `${Math.round(((encodeTime - calibrationPredictedMs) / calibrationPredictedMs) * 100)}%`
-        : 'N/A');
+      res.setHeader(
+        'X-Adaptive-Error',
+        calibrationPredictedMs > 0
+          ? `${Math.round(((encodeTime - calibrationPredictedMs) / calibrationPredictedMs) * 100)}%`
+          : 'N/A'
+      );
       res.setHeader('X-Encode-Effort', String(finalRecordedEffort));
 
       // Request-level release is handled exactly once in the outer finally.
@@ -2399,8 +2535,8 @@ timedOut: signal.aborted
       // Encoding verifier
       if (ENABLE_ENCODING_VERIFIER) {
         if (!verifyOutput(outputBuffer, outputFormat)) {
-res.setHeader('X-Encoding-Verifier', 'FAILED');
-res.status(502);
+          res.setHeader('X-Encoding-Verifier', 'FAILED');
+          res.status(502);
           if (ENABLE_ORACLE_LEDGER) metrics.encodingFailures++;
           return Buffer.alloc(0);
         }
@@ -2408,7 +2544,10 @@ res.status(502);
       }
 
       // If compressed is larger than original, return original
-      if (outputBuffer.length >= buffer.length && !(metadata.exif && ENABLE_METADATA_REAPER && outputBuffer.length <= buffer.length * 1.1)) {
+      if (
+        outputBuffer.length >= buffer.length &&
+        !(metadata.exif && ENABLE_METADATA_REAPER && outputBuffer.length <= buffer.length * 1.1)
+      ) {
         res.setHeader('X-Compression', 'SKIPPED');
         res.setHeader('Content-Type', req.opts?.originType || `image/${format}`);
         if (placeholder) res.setHeader('X-Placeholder', placeholder);
@@ -2432,7 +2571,7 @@ res.status(502);
         contentType,
         placeholder,
         grade: judgeResult ? judgeResult.grade : null,
-        palette,
+        palette
       };
       if (exactKey && !cpuPressure && watchdogScaleFactor === 1 && finalRisk !== 'budget_exceeded') {
         exactCache.set(exactKey, cacheEntry);
@@ -2450,12 +2589,21 @@ res.status(502);
         res.setHeader('X-Quality-Score', String(judgeResult.score));
       }
 
-      res.setHeader('X-Image-Type', analysis.isMangaStrip ? 'manga-strip' :
-        analysis.isMangaWidePage ? 'manga-wide' :
-        analysis.isMangaPage ? 'manga-page' :
-        analysis.isAnime ? 'anime' :
-        analysis.isGrayscale ? 'grayscale' : 'photo');
-      
+      res.setHeader(
+        'X-Image-Type',
+        analysis.isMangaStrip
+          ? 'manga-strip'
+          : analysis.isMangaWidePage
+            ? 'manga-wide'
+            : analysis.isMangaPage
+              ? 'manga-page'
+              : analysis.isAnime
+                ? 'anime'
+                : analysis.isGrayscale
+                  ? 'grayscale'
+                  : 'photo'
+      );
+
       const getHeaderStr = (name) => {
         const v = res.getHeader(name);
         return Array.isArray(v) ? String(v[0] ?? '') : String(v ?? '');
@@ -2473,10 +2621,8 @@ res.status(502);
         textPreservation: getHeaderStr('X-Text-Preservation') === 'ACTIVE',
         textSharpen: getHeaderStr('X-Text-Sharpen') === 'BOOSTED',
         hdrConversion: getHeaderStr('X-HDR-Conversion') === 'ACTIVE',
-        hdrToneMap: getHeaderStr('X-HDR-ToneMap') || false,
         alphaTrim: getHeaderStr('X-Alpha-Trim') === 'ACTIVE',
         alphaTrimPad: getHeaderStr('X-Alpha-Trim-Pad') || false,
-        frameDrop: getHeaderStr('X-Frame-Drop') || false,
         metadataReaper: ENABLE_METADATA_REAPER,
         safeMetadata: ENABLE_SAFE_METADATA,
 
@@ -2487,16 +2633,11 @@ res.status(502);
           (!userExplicitlyWantsColor && analysis.isGrayscale && !analysis.isColorful)
         ),
 
-        resize: (targetWidth || targetHeight)
-          ? `${targetWidth || origW}x${targetHeight || origH}`
-          : false,
+        resize: targetWidth || targetHeight ? `${targetWidth || origW}x${targetHeight || origH}` : false,
 
         colorspaceNormalization: 'srgb',
 
-        alphaFlatten: Boolean(
-          metadata.hasAlpha &&
-          (alphaStrippable || (STRIP_ALPHA && outputFormat === 'jpeg'))
-        ),
+        alphaFlatten: Boolean(metadata.hasAlpha && (alphaStrippable || (STRIP_ALPHA && outputFormat === 'jpeg'))),
 
         manualRotation: req.opts?.rotate ? String(req.opts.rotate) : false
       };
@@ -2505,10 +2646,10 @@ res.status(502);
         const value = enhancementState[key];
         return value === true || (typeof value === 'string' && value.length > 0 && value !== 'false');
       });
-      
+
       const concurrencyStatus = concurrencyGovernor.getStatus();
-   log.info({
-     event: 'COMPRESS',
+      log.info({
+        event: 'COMPRESS',
         reqId,
         activeRequests,
         activeEncodes,
@@ -2542,42 +2683,53 @@ res.status(502);
         inputDims: `${width}x${height}`,
         outputDims: `${targetWidth || origW}x${targetHeight || origH}`,
         pixelCost: totalPixelCost,
-        imageType: analysis.isMangaStrip ? 'manga-strip' :
-          analysis.isMangaWidePage ? 'manga-wide' :
-          analysis.isMangaPage ? 'manga-page' :
-          analysis.isAnime ? 'anime' :
-          analysis.isGrayscale ? 'grayscale' : 'photo',
+        imageType: analysis.isMangaStrip
+          ? 'manga-strip'
+          : analysis.isMangaWidePage
+            ? 'manga-wide'
+            : analysis.isMangaPage
+              ? 'manga-page'
+              : analysis.isAnime
+                ? 'anime'
+                : analysis.isGrayscale
+                  ? 'grayscale'
+                  : 'photo',
         frames,
         mode,
         cpuPressure,
         cpuLagMs: Math.round(eventLoopLag * 100) / 100,
         cpuPressureDisabledEnhancements: cpuPressure,
-       enhancements: enhancementState,
-       appliedEnhancements,
-       watchdog,
-       totalElapsedMs: Date.now() - (req.proxyStartedAt || startedAt),
-       adaptive: {
-         bucket: adaptive.bucket,
-         budgetMs: budget.budgetMs,
-         predictedMs: calibrationPredictedMs,
-         actualMs: encodeTime,
-         errorPercent: calibrationPredictedMs > 0
-           ? Math.round(((encodeTime - calibrationPredictedMs) / calibrationPredictedMs) * 100)
-           : 0,
-         risk: typeof finalRisk !== 'undefined' ? finalRisk : adaptive.risk,
-         pressure: adaptivePressure,
-         eventLoopLagMs: eventLoopLag,
-         activeEncodes,
-         memoryPressure: memoryGovernor.isUnderPressure(),
-         watchdogScaleFactor: watchdogScaleFactor,
-         finalEffort: safeEncodeEffort
-       }
-     });
-      
-      res.setHeader('X-Watchdog', Object.entries(watchdog).map(([k,v])=>`${k}:${v}ms`).join(','));
+        enhancements: enhancementState,
+        appliedEnhancements,
+        watchdog,
+        totalElapsedMs: Date.now() - (req.proxyStartedAt || startedAt),
+        adaptive: {
+          bucket: adaptive.bucket,
+          budgetMs: budget.budgetMs,
+          predictedMs: calibrationPredictedMs,
+          actualMs: encodeTime,
+          errorPercent:
+            calibrationPredictedMs > 0
+              ? Math.round(((encodeTime - calibrationPredictedMs) / calibrationPredictedMs) * 100)
+              : 0,
+          risk: typeof finalRisk !== 'undefined' ? finalRisk : adaptive.risk,
+          pressure: adaptivePressure,
+          eventLoopLagMs: eventLoopLag,
+          activeEncodes,
+          memoryPressure: memoryGovernor.isUnderPressure(),
+          watchdogScaleFactor: watchdogScaleFactor,
+          finalEffort: safeEncodeEffort
+        }
+      });
+
+      res.setHeader(
+        'X-Watchdog',
+        Object.entries(watchdog)
+          .map(([k, v]) => `${k}:${v}ms`)
+          .join(',')
+      );
       res.setHeader('Content-Length', outputBuffer.length);
       return outputBuffer;
-
     } finally {
       if (pixelsAdmitted) {
         memGov.releasePixels(totalPixelCost);
@@ -2588,12 +2740,15 @@ res.status(502);
     if (clientDisconnected || signal.aborted) {
       const abortMessage = signal.reason?.message || '';
 
-      log.warn({
-        reqId,
-        encodeTimeMs: Date.now() - startedAt,
-        pixelCost: totalPixelCost,
-        abortReason: abortMessage || 'UNKNOWN'
-      }, '[CLIENT_DISCONNECT] Client aborted connection');
+      log.warn(
+        {
+          reqId,
+          encodeTimeMs: Date.now() - startedAt,
+          pixelCost: totalPixelCost,
+          abortReason: abortMessage || 'UNKNOWN'
+        },
+        '[CLIENT_DISCONNECT] Client aborted connection'
+      );
 
       if (!res.headersSent) {
         res.status(abortMessage === 'SHARP_HARD_TIMEOUT' ? 504 : 499);
@@ -2604,19 +2759,60 @@ res.status(502);
     }
 
     const safeMessage = err?.message ? String(err.message).split('?')[0] : 'Unknown compress error';
+
+    // Codec sharp cannot decode (or a body that is not an image): fail loudly, never fall back to the uncompressed image.
+    if (
+      /unsupported image format|unsupported (codec|feature|image type|compression)|not in a known format/i.test(
+        safeMessage
+      ) &&
+      !res.headersSent &&
+      !res.writableEnded
+    ) {
+      const codecType = req.opts?.originType || 'unknown';
+      log.warn(
+        {
+          event: 'CODEC_UNSUPPORTED',
+          reqId,
+          originType: codecType,
+          bytes: buffer.length,
+          magicHex: buffer.subarray(0, 12).toString('hex'),
+          magicAscii: buffer
+            .subarray(0, 16)
+            .toString('latin1')
+            .replace(/[^\x20-\x7e]/g, '.'),
+          error: safeMessage,
+          sharpVersion: sharp.versions.sharp,
+          vipsVersion: sharp.versions.vips
+        },
+        '[CODEC_UNSUPPORTED] sharp cannot decode this image; failing without uncompressed fallback'
+      );
+      res.setHeader('X-Compression', 'FAILED');
+      res.setHeader('X-Codec-Unsupported', codecType);
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.removeHeader('ETag');
+      res.removeHeader('Last-Modified');
+      res.removeHeader('Expires');
+      if (ENABLE_ORACLE_LEDGER) metrics.encodingFailures++;
+      res.status(415).json({ error: 'Unsupported image codec', codec: codecType, uncompressedFallback: 'disabled' });
+      return null;
+    }
     const tmpFreeMB = await getTmpFreeMB();
-        // Corrupt/truncated input: let the proxy re-fetch and retry instead of failing here.
+    // Corrupt/truncated input: let the proxy re-fetch and retry instead of failing here.
     if (/corrupt|premature end|invalid image/i.test(safeMessage) && !res.headersSent && !res.writableEnded) {
       throw err;
     }
 
-    log.error({
-      reqId,
-      watchdog,
-      error: safeMessage,
-      tmpFreeMB,
-      rssMB: memGov.getRssMB()
-    }, '[WATCHDOG_FATAL]');
+    log.error(
+      {
+        reqId,
+        watchdog,
+        error: safeMessage,
+        tmpFreeMB,
+        rssMB: memGov.getRssMB()
+      },
+      '[WATCHDOG_FATAL]'
+    );
     res.setHeader('X-Compression', 'FAILED');
 
     if (ENABLE_ORACLE_LEDGER) {
@@ -2624,7 +2820,7 @@ res.status(502);
       metrics.totalBytesOut += buffer.length;
     }
 
-        if (!res.headersSent && !res.writableEnded) {
+    if (!res.headersSent && !res.writableEnded) {
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       res.removeHeader('ETag');
@@ -2655,12 +2851,16 @@ res.status(502);
     // If RSS is dangerously high and no other requests are active,
     // gracefully exit to force Vercel to spin up a fresh instance.
     // This prevents the OS OOM-killer from severing active TCP sockets.
-        const currentRssMB = memGov.getRssMB();
+    const currentRssMB = memGov.getRssMB();
     if (activeRequests === 0 && inflight.current() <= 1 && currentRssMB >= memoryGovernor.RSS_ADMISSION_MB) {
-      log.warn({ event: 'SELF_RECYCLE', rssMB: currentRssMB, admissionMB: memoryGovernor.RSS_ADMISSION_MB }, '[SELF-RECYCLE] RSS at admission ceiling with empty queue, recycling after response flush');
-      const recycle = () => setTimeout(() => {
-        if (activeRequests === 0 && inflight.current() === 0) process.exit(0);
-      }, 250).unref();
+      log.warn(
+        { event: 'SELF_RECYCLE', rssMB: currentRssMB, admissionMB: memoryGovernor.RSS_ADMISSION_MB },
+        '[SELF-RECYCLE] RSS at admission ceiling with empty queue, recycling after response flush'
+      );
+      const recycle = () =>
+        setTimeout(() => {
+          if (activeRequests === 0 && inflight.current() === 0) process.exit(0);
+        }, 250).unref();
       if (res.writableEnded || res.destroyed) recycle();
       else res.once('close', recycle);
     }

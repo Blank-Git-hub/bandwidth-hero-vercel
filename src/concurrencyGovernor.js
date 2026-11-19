@@ -11,7 +11,9 @@ function safeFloat(value, fallback) {
 }
 
 const ENABLED = ['1', 'true', 'yes', 'on'].includes(
-  String(process.env.ENABLE_ADAPTIVE_CONCURRENCY || 'true').trim().toLowerCase()
+  String(process.env.ENABLE_ADAPTIVE_CONCURRENCY || 'true')
+    .trim()
+    .toLowerCase()
 );
 
 const MIN_LIMIT = safeInt(process.env.ADAPTIVE_CONCURRENCY_MIN, 1);
@@ -83,12 +85,7 @@ function release(outcome = {}) {
 
   if (!ENABLED) return;
 
-  const {
-    success = true,
-    timedOut = false,
-    encodeTimeMs = 0,
-    eventLoopLag = 0
-  } = outcome;
+  const { success = true, timedOut = false, encodeTimeMs = 0, eventLoopLag = 0 } = outcome;
 
   if (encodeTimeMs > 0) {
     recentEncodeTimes.push(encodeTimeMs);
@@ -217,11 +214,14 @@ function waitForEncodeSlot({ timeoutMs = 30000, signal = null } = {}) {
       reject(err);
     };
 
-    waiter.timer = setTimeout(() => {
-      const err = new Error('ENCODE_WAIT_TIMEOUT');
-      err.code = 'ENCODE_WAIT_TIMEOUT';
-      fail(err);
-    }, Math.max(1, Number(timeoutMs) || 30000));
+    waiter.timer = setTimeout(
+      () => {
+        const err = new Error('ENCODE_WAIT_TIMEOUT');
+        err.code = 'ENCODE_WAIT_TIMEOUT';
+        fail(err);
+      },
+      Math.max(1, Number(timeoutMs) || 30000)
+    );
 
     if (signal) {
       waiter.signal = signal;
@@ -287,11 +287,7 @@ function releaseEncode(outcome = {}) {
 
   if (!ENABLED) return;
 
-  const {
-    success = true,
-    timedOut = false,
-    encodeTimeMs = 0
-  } = outcome;
+  const { success = true, timedOut = false, encodeTimeMs = 0 } = outcome;
 
   const now = Date.now();
   if (now - encodeLastAdjustAt < ENCODE_COOLDOWN_MS) return;

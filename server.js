@@ -36,40 +36,46 @@ function parseTrustProxy(value) {
 app.disable('x-powered-by');
 app.set('trust proxy', parseTrustProxy(process.env.TRUST_PROXY));
 
-app.use(helmet({
-  contentSecurityPolicy: false,
-  frameguard: { action: 'deny' },
-  crossOriginResourcePolicy: { policy: 'cross-origin' },
-  referrerPolicy: { policy: 'no-referrer' }
-}));
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    frameguard: { action: 'deny' },
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    referrerPolicy: { policy: 'no-referrer' }
+  })
+);
 
-// F20: Request ID middleware
+// Request ID middleware
 app.use((req, res, next) => {
-const rawReqId = req.headers['x-request-id'];
-const reqId = typeof rawReqId === 'string' && /^[A-Za-z0-9._:-]{1,64}$/.test(rawReqId)
-  ? rawReqId
-  : crypto.randomUUID();
-req.id = reqId;
-res.setHeader('X-Request-ID', reqId);
-inflight.enter();
-let inflightLeft = false;
-const inflightLeave = () => { if (!inflightLeft) { inflightLeft = true; inflight.leave(); } };
-res.on('close', inflightLeave);
-res.on('finish', inflightLeave);
-const ac = new AbortController();
-try {
-  Object.defineProperty(req, 'signal', {
-    value: ac.signal,
-    writable: true,
-    configurable: true
+  const rawReqId = req.headers['x-request-id'];
+  const reqId =
+    typeof rawReqId === 'string' && /^[A-Za-z0-9._:-]{1,64}$/.test(rawReqId) ? rawReqId : crypto.randomUUID();
+  req.id = reqId;
+  res.setHeader('X-Request-ID', reqId);
+  inflight.enter();
+  let inflightLeft = false;
+  const inflightLeave = () => {
+    if (!inflightLeft) {
+      inflightLeft = true;
+      inflight.leave();
+    }
+  };
+  res.on('close', inflightLeave);
+  res.on('finish', inflightLeave);
+  const ac = new AbortController();
+  try {
+    Object.defineProperty(req, 'signal', {
+      value: ac.signal,
+      writable: true,
+      configurable: true
+    });
+  } catch {
+    req.abortSignal = ac.signal;
+  }
+  res.on('close', () => {
+    if (!res.writableEnded) ac.abort(new Error('CLIENT_DISCONNECT'));
   });
-} catch {
-  req.abortSignal = ac.signal;
-}
-res.on('close', () => {
-if (!res.writableEnded) ac.abort(new Error('CLIENT_DISCONNECT'));
-});
-next();
+  next();
 });
 
 const logger = pino({
@@ -80,17 +86,42 @@ const logger = pino({
   timestamp: pino.stdTimeFunctions.isoTime
 });
 
+// Instance start marker: lets you line up cold starts and recycles with slow or stuck periods.
+logger.info(
+  {
+    event: 'INSTANCE_START',
+    node: process.version,
+    onVercel: Boolean(process.env.VERCEL),
+    memoryCeilingMB: memoryGovernor.MEMORY_CEILING_MB,
+    rssMB: memoryGovernor.getRssMB()
+  },
+  '[INSTANCE START]'
+);
+
 app.use(
   pinoHttp({
     logger,
     customProps: (req) => ({ reqId: req.id }),
+    // Instance snapshot on every access-log line (inflight = other requests running at completion).
+    customSuccessObject: (req, res, val) => ({
+      ...val,
+      rssMB: memoryGovernor.getRssMB(),
+      inflight: inflight.current(),
+      uptimeSec: Math.floor(process.uptime())
+    }),
+    customErrorObject: (req, res, err, val) => ({
+      ...val,
+      rssMB: memoryGovernor.getRssMB(),
+      inflight: inflight.current(),
+      uptimeSec: Math.floor(process.uptime())
+    }),
     serializers: {
       req(req) {
         let url = req.url || '';
 
         url = url.replace(
           /([?&])(api|apikey|api_key|token|access_token|sig|signature|session|auth|secret|key|password)=([^&]*)/gi,
-                    '$1$2=[REDACTED]'
+          '$1$2=[REDACTED]'
         );
 
         if (process.env.LOG_FULL_URL !== 'true') {
@@ -126,29 +157,28 @@ app.use((req, res, next) => {
     const status = res.statusCode;
 
     const emptyBody = contentLength === null || contentLength === '0';
-    const suspicious =
-      status === 304 ||
-      ghost ||
-      emptyBody ||
-      contentType.startsWith('image/');
+    const suspicious = status === 304 || ghost || emptyBody || contentType.startsWith('image/');
 
     if (!suspicious) return;
 
-    log.info({
-      event: 'RESPONSE_FINAL',
-      reqId: req.id,
-      status,
-      contentLength,
-      contentType: contentType || null,
-      ghost,
-      ghostReason,
-      adaptiveConcurrency: String(res.getHeader('x-adaptive-concurrency') || ''),
-      memoryGovernor: String(res.getHeader('x-memory-governor') || ''),
-      encodeWait: String(res.getHeader('x-adaptive-encode-wait') || ''),
-      encodeQueued: String(res.getHeader('x-adaptive-encode-queued') || ''),
-      timeoutGuillotine: String(res.getHeader('x-timeout-guillotine') || ''),
-      path: String(req.url || '').split('?')[0]
-    }, '[RESPONSE FINAL]');
+    log.info(
+      {
+        event: 'RESPONSE_FINAL',
+        reqId: req.id,
+        status,
+        contentLength,
+        contentType: contentType || null,
+        ghost,
+        ghostReason,
+        adaptiveConcurrency: String(res.getHeader('x-adaptive-concurrency') || ''),
+        memoryGovernor: String(res.getHeader('x-memory-governor') || ''),
+        encodeWait: String(res.getHeader('x-adaptive-encode-wait') || ''),
+        encodeQueued: String(res.getHeader('x-adaptive-encode-queued') || ''),
+        timeoutGuillotine: String(res.getHeader('x-timeout-guillotine') || ''),
+        path: String(req.url || '').split('?')[0]
+      },
+      '[RESPONSE FINAL]'
+    );
   });
 
   next();
@@ -185,7 +215,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// F8: CORS / OPTIONS handler
+// CORS / OPTIONS handler
 app.use((req, res, next) => {
   if (req.method === 'OPTIONS') {
     res.setHeader('Allow', 'GET, HEAD, OPTIONS');
@@ -216,12 +246,12 @@ app.get('/favicon.ico', (req, res) => {
   res.status(204).end();
 });
 
-// F17: /metrics requires auth
+// /metrics requires auth
 app.get('/metrics', authenticate, (req, res) => {
   res.json(getMetrics());
 });
 
-// F17: /deep-health requires auth
+// /deep-health requires auth
 app.get('/deep-health', authenticate, async (req, res) => {
   try {
     const health = await checkHealth();
@@ -242,7 +272,7 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
 
-//// Global error handler
+// Global error handler
 app.use((err, req, res, next) => {
   const reqId = req.id || 'unknown';
   const safeMessage = err?.message ? String(err.message).split('?')[0] : 'Unknown error';
