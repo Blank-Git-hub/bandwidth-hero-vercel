@@ -1316,6 +1316,7 @@ export default async function compress(req, res, buffer, governor) {
 
   let totalPixelCost = 0;
   let pixelsAdmitted = false;
+  let pixelCharge = 0;
   let finalEncodeTime = 0;
   let eventLoopLag;
 
@@ -1546,7 +1547,7 @@ export default async function compress(req, res, buffer, governor) {
     const stripPixelsPostSplice = width * stripHeightPostSplice;
     const requiredStripMBPostSplice = (stripPixelsPostSplice * 4) / (1024 * 1024);
     const availableMB = memGov.getAvailableMB();
-    let canNativeAnimate = isAnimatedPostSplice && requiredStripMBPostSplice <= availableMB;
+    const canNativeAnimate = isAnimatedPostSplice && requiredStripMBPostSplice <= availableMB;
 
     if (canNativeAnimate) {
       res.setHeader('X-Animated-Pipeline', 'NATIVE_FULL');
@@ -1580,22 +1581,32 @@ export default async function compress(req, res, buffer, governor) {
 
     if (ENABLE_ORACLE_LEDGER) metrics.cacheMisses++;
 
-    // A decoded animation that cannot fit in /tmp fails mid-encode, so it is never admitted.
-    const stripTmpFreeMB = (metadata.pages || 1) > 1 ? await getTmpFreeMB() : -1;
-    const stripFitsTmp = stripTmpFreeMB < 0 || requiredStripMBPostSplice <= stripTmpFreeMB;
-    let pixelsGranted = stripFitsTmp && memGov.admitPixels(totalPixelCost);
+    // libvips streams animation frames: measured about 2.6 bytes per pixel, against the 6 the budget assumes
+    pixelCharge = (metadata.pages || 1) > 1 ? Math.ceil(totalPixelCost / 2) : totalPixelCost;
 
-    // An animation too large to decode in memory is served as its first frame instead of failing with a 503.
-    if (!pixelsGranted && (metadata.pages || 1) > 1) {
-      frames = 1;
-      metadata = { ...metadata, pages: 1 };
-      totalPixelCost = Math.ceil(
-        Math.max(width * height, (metadata.width || 0) * (metadata.height || 0)) * pixelWeight
-      );
-      canNativeAnimate = false;
-      res.removeHeader('X-Animated-Pipeline');
-      res.setHeader('X-Animated-Fallback', 'FIRST_FRAME');
-      pixelsGranted = memGov.admitPixels(totalPixelCost);
+    // An animation that only has to wait for other work to finish queues for its turn instead of failing
+    let pixelsGranted = memGov.admitPixels(pixelCharge);
+    const pixelWaitStartedAt = Date.now();
+    const pixelWaitDeadline = startedAt + Math.floor(hardTimeoutMs * 0.5);
+
+    while (
+      !pixelsGranted &&
+      (metadata.pages || 1) > 1 &&
+      memGov.getActivePixelCost() > 0 &&
+      !signal.aborted &&
+      Date.now() < pixelWaitDeadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      pixelsGranted = memGov.admitPixels(pixelCharge);
+    }
+
+    if (Date.now() - pixelWaitStartedAt > 0) {
+      res.setHeader('X-Pixel-Wait', `${Date.now() - pixelWaitStartedAt}ms`);
+    }
+
+    if (!pixelsGranted && (clientDisconnected || signal.aborted)) {
+      res.status(499);
+      return Buffer.alloc(0);
     }
 
     if (!pixelsGranted) {
@@ -2750,7 +2761,7 @@ export default async function compress(req, res, buffer, governor) {
       return outputBuffer;
     } finally {
       if (pixelsAdmitted) {
-        memGov.releasePixels(totalPixelCost);
+        memGov.releasePixels(pixelCharge);
         pixelsAdmitted = false;
       }
     }
@@ -2853,7 +2864,7 @@ export default async function compress(req, res, buffer, governor) {
     if (timeoutHandle) clearTimeout(timeoutHandle);
 
     if (pixelsAdmitted) {
-      memGov.releasePixels(totalPixelCost);
+      memGov.releasePixels(pixelCharge);
       pixelsAdmitted = false;
     }
 
