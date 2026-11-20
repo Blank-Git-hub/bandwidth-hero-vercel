@@ -1581,8 +1581,8 @@ export default async function compress(req, res, buffer, governor) {
 
     if (ENABLE_ORACLE_LEDGER) metrics.cacheMisses++;
 
-    // libvips streams animation frames: measured about 2.6 bytes per pixel, against the 6 the budget assumes
-    pixelCharge = (metadata.pages || 1) > 1 ? Math.ceil(totalPixelCost / 2) : totalPixelCost;
+    // libvips streams animation frames: measured 2.4 to 4 bytes per pixel (shrunk to full size), against the 6 the budget assumes
+    pixelCharge = (metadata.pages || 1) > 1 ? Math.ceil(totalPixelCost * 0.7) : totalPixelCost;
 
     // An animation that only has to wait for other work to finish queues for its turn instead of failing
     let pixelsGranted = memGov.admitPixels(pixelCharge);
@@ -1801,6 +1801,8 @@ export default async function compress(req, res, buffer, governor) {
 
       // ADAPTIVE DIRECTOR v3
       const budget = adaptiveDirector.getEncodeBudget({ startedAt: req.proxyStartedAt || startedAt });
+      // Same 15% margin as the re-budget after the encode-queue wait, so a page cannot pass here and be rejected there
+      const fitBudgetMs = Math.floor(budget.budgetMs * 0.85);
       const adaptivePressure = computeAdaptivePressure({
         eventLoopLag,
         activeEncodes,
@@ -1815,7 +1817,7 @@ export default async function compress(req, res, buffer, governor) {
         frames,
         pixelCost: totalPixelCost,
         inputFormat: req.opts?.originType || 'image/jpeg',
-        budgetMs: budget.budgetMs,
+        budgetMs: fitBudgetMs,
         pressure: adaptivePressure
       });
 
@@ -2051,10 +2053,10 @@ export default async function compress(req, res, buffer, governor) {
           pressure: adaptivePressure
         });
 
-        if (effortZeroPrediction > budget.budgetMs) {
+        if (effortZeroPrediction > fitBudgetMs) {
           // Still over budget. Shrink dimensions to fit.
           // No extra animated penalty — the sqrt formula already targets the time budget.
-          watchdogScaleFactor = Math.sqrt(budget.budgetMs / effortZeroPrediction);
+          watchdogScaleFactor = Math.sqrt(fitBudgetMs / effortZeroPrediction);
 
           watchdogScaleFactor = Math.max(0.4, Math.min(watchdogScaleFactor, 1));
           res.setHeader('X-Watchdog', `SHRINK_${Math.round(watchdogScaleFactor * 100)}%`);
