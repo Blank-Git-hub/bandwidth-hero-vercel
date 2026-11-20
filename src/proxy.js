@@ -1058,6 +1058,8 @@ export default async function proxy(req, res) {
         );
 
         let retrySuccess = false;
+        let lastSeenBytes = rawBody.length;
+        let lastSeenAt = Date.now();
 
         for (let attempt = 1; attempt <= MAX_DECODE_RETRIES; attempt++) {
           // Give an upstream node that is still receiving the file time to finish before fetching again
@@ -1116,6 +1118,18 @@ export default async function proxy(req, res) {
               break;
             }
             res.setHeader('X-Corrupt-Retry', `FAILED_ATTEMPT_${attempt}`);
+
+            // Stop early when the upstream node cannot finish the file before our last attempt
+            const declaredBytes = declaredRiffBytes(rawBody);
+            if (declaredBytes && declaredBytes > rawBody.length) {
+              const growthPerMs = (rawBody.length - lastSeenBytes) / Math.max(1, Date.now() - lastSeenAt);
+              const missingMs = growthPerMs > 0 ? (declaredBytes - rawBody.length) / growthPerMs : Infinity;
+              const waitLeftMs =
+                ((MAX_DECODE_RETRIES * (MAX_DECODE_RETRIES + 1)) / 2 - (attempt * (attempt + 1)) / 2) * 1000;
+              if (missingMs > waitLeftMs) break;
+            }
+            lastSeenBytes = rawBody.length;
+            lastSeenAt = Date.now();
           }
         }
 
@@ -1124,6 +1138,7 @@ export default async function proxy(req, res) {
             {
               reqId,
               bytes: rawBody.length,
+              declaredBytes: declaredRiffBytes(rawBody),
               bodyPreview: bodyPreview(rawBody, 64),
               url: sanitizeUrl(targetUrl)
             },
