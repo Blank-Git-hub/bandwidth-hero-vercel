@@ -230,8 +230,12 @@ function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
+// An idle instance keeps memory that freed image buffers never give back, and above this much big animations are
+// refused. Restarting it is cheaper than refusing every page that follows.
+const RECYCLE_RSS_MB = Math.floor(memoryGovernor.MEMORY_CEILING_MB * 0.35);
+
 // RESOURCE WATCHDOG:
-// If the instance is idle and /tmp or RSS is exhausted, recycle cleanly.
+// If the instance is idle and /tmp is exhausted or RSS is above the recycle threshold, recycle cleanly.
 setInterval(async () => {
   if (isShuttingDown || activeRequests > 0 || activeEncodes > 0 || inflight.current() > 0) return;
 
@@ -260,7 +264,7 @@ setInterval(async () => {
   const rssMB = memoryGovernor.getRssMB();
 
   const tmpLow = tmpFreeMB >= 0 && tmpFreeMB < 64;
-  const rssHigh = rssMB >= memoryGovernor.RSS_ADMISSION_MB;
+  const rssHigh = rssMB >= RECYCLE_RSS_MB;
 
   // A request can arrive while the awaits above are pending; never exit underneath one.
   if (isShuttingDown || activeRequests > 0 || activeEncodes > 0 || inflight.current() > 0) return;
@@ -2878,15 +2882,15 @@ export default async function compress(req, res, buffer, governor) {
       eventLoopLag: typeof eventLoopLag === 'number' ? eventLoopLag : 0
     });
 
-    // ANTI-OOM SELF-RECYCLE:
-    // If RSS is dangerously high and no other requests are active,
+    // MEMORY SELF-RECYCLE:
+    // If RSS is above the recycle threshold and no other requests are active,
     // gracefully exit to force Vercel to spin up a fresh instance.
-    // This prevents the OS OOM-killer from severing active TCP sockets.
+    // This also prevents the OS OOM-killer from severing active TCP sockets.
     const currentRssMB = memGov.getRssMB();
-    if (activeRequests === 0 && inflight.current() <= 1 && currentRssMB >= memoryGovernor.RSS_ADMISSION_MB) {
+    if (activeRequests === 0 && inflight.current() <= 1 && currentRssMB >= RECYCLE_RSS_MB) {
       log.warn(
-        { event: 'SELF_RECYCLE', rssMB: currentRssMB, admissionMB: memoryGovernor.RSS_ADMISSION_MB },
-        '[SELF-RECYCLE] RSS at admission ceiling with empty queue, recycling after response flush'
+        { event: 'SELF_RECYCLE', rssMB: currentRssMB, recycleMB: RECYCLE_RSS_MB },
+        '[SELF-RECYCLE] RSS above recycle threshold with empty queue, recycling after response flush'
       );
       const recycle = () =>
         setTimeout(() => {
