@@ -128,6 +128,10 @@ let activeRequests = 0;
 let activeEncodes = 0;
 let isShuttingDown = false;
 
+// Share of the free /tmp space a resized animation may fill. A real out-of-space failure tightens it for the rest of the
+// instance's life, so a retry shrinks more and succeeds.
+let tmpUseFactor = 0.6;
+
 function recordMetric(key, value = 1) {
   if (metrics.featureActivations[key] !== undefined) {
     metrics.featureActivations[key] += value;
@@ -2079,7 +2083,7 @@ export default async function compress(req, res, buffer, governor) {
       // An animation is written to /tmp while it is resized, so the resized strip has to fit the free space
       if (canNativeAnimate) {
         const stripTmpFreeMB = await getTmpFreeMB();
-        const diskScale = Math.max(0.4, Math.sqrt((stripTmpFreeMB * 0.85) / requiredStripMBPostSplice));
+        const diskScale = Math.max(0.3, Math.sqrt((stripTmpFreeMB * tmpUseFactor) / requiredStripMBPostSplice));
 
         if (stripTmpFreeMB > 0 && diskScale < watchdogScaleFactor) {
           if (watchdogScaleFactor === 1) {
@@ -2859,12 +2863,17 @@ export default async function compress(req, res, buffer, governor) {
       throw err;
     }
 
+    if (/no space left/i.test(safeMessage)) {
+      tmpUseFactor = Math.max(0.2, tmpUseFactor * 0.75);
+    }
+
     log.error(
       {
         reqId,
         watchdog,
         error: safeMessage,
         tmpFreeMB,
+        tmpUseFactor,
         rssMB: memGov.getRssMB()
       },
       '[WATCHDOG_FATAL]'
