@@ -1321,6 +1321,7 @@ export default async function compress(req, res, buffer, governor) {
   let totalPixelCost = 0;
   let pixelsAdmitted = false;
   let pixelCharge = 0;
+  let recycleAfterRefusal = false;
   let finalEncodeTime = 0;
   let eventLoopLag;
 
@@ -1626,6 +1627,11 @@ export default async function compress(req, res, buffer, governor) {
       res.setHeader('X-Memory-Governor', 'REJECTED');
       res.setHeader('Retry-After', '5');
       if (ENABLE_ORACLE_LEDGER) metrics.memoryRejections++;
+
+      // Nothing else is using memory and a fresh instance (about 150 MB RSS) could take this page: restart, don't refuse again
+      const freshAvailableMB = memGov.getAvailableMB() + Math.max(0, memGov.getRssMB() - 150);
+      const pixelsPerMB = memGov.getPixelBudget() / Math.max(1, memGov.getAvailableMB());
+      recycleAfterRefusal = memGov.getActivePixelCost() === 0 && pixelCharge <= freshAvailableMB * pixelsPerMB;
       return Buffer.alloc(0);
     }
 
@@ -2067,6 +2073,21 @@ export default async function compress(req, res, buffer, governor) {
           // Downscale compensation: a shrunk canvas carries quality more cheaply.
           quality = Math.min(95, quality + 10);
           res.setHeader('X-Shrink-Quality-Boost', '+10');
+        }
+      }
+
+      // An animation is written to /tmp while it is resized, so the resized strip has to fit the free space
+      if (canNativeAnimate) {
+        const stripTmpFreeMB = await getTmpFreeMB();
+        const diskScale = Math.max(0.4, Math.sqrt((stripTmpFreeMB * 0.85) / requiredStripMBPostSplice));
+
+        if (stripTmpFreeMB > 0 && diskScale < watchdogScaleFactor) {
+          if (watchdogScaleFactor === 1) {
+            quality = Math.min(95, quality + 10);
+            res.setHeader('X-Shrink-Quality-Boost', '+10');
+          }
+          watchdogScaleFactor = diskScale;
+          res.setHeader('X-Watchdog', `SHRINK_${Math.round(watchdogScaleFactor * 100)}%`);
         }
       }
 
@@ -2887,10 +2908,10 @@ export default async function compress(req, res, buffer, governor) {
     // gracefully exit to force Vercel to spin up a fresh instance.
     // This also prevents the OS OOM-killer from severing active TCP sockets.
     const currentRssMB = memGov.getRssMB();
-    if (activeRequests === 0 && inflight.current() <= 1 && currentRssMB >= RECYCLE_RSS_MB) {
+    if (activeRequests === 0 && inflight.current() <= 1 && (currentRssMB >= RECYCLE_RSS_MB || recycleAfterRefusal)) {
       log.warn(
-        { event: 'SELF_RECYCLE', rssMB: currentRssMB, recycleMB: RECYCLE_RSS_MB },
-        '[SELF-RECYCLE] RSS above recycle threshold with empty queue, recycling after response flush'
+        { event: 'SELF_RECYCLE', rssMB: currentRssMB, recycleMB: RECYCLE_RSS_MB, afterRefusal: recycleAfterRefusal },
+        '[SELF-RECYCLE] RSS above recycle threshold or page refused on an idle instance, recycling after response flush'
       );
       const recycle = () =>
         setTimeout(() => {
