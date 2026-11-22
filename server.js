@@ -6,6 +6,7 @@
 // Or via Vercel/project environment configuration.
 
 import 'dotenv/config';
+import './src/vipsEnv.js';
 import express from 'express';
 import helmet from 'helmet';
 import pino from 'pino';
