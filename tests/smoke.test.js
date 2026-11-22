@@ -17,6 +17,7 @@ const MODULES = [
   '../src/rateLimiter.js',
   '../src/shouldCompress.js',
   '../src/urlGuard.js',
+  '../src/vipsEnv.js',
   '../server.js'
 ];
 
