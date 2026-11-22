@@ -273,11 +273,18 @@ function getSampleCount(format, bucket) {
   return count;
 }
 
-function getCalibration(format) {
-  return calibration.get(format) || { factor: 1, samples: 0 };
+// Measured on Vercel: animated WebP encodes take about 55% of what the built-in estimate predicts. A fresh instance starts
+// from 0.75 instead of 1.0, so its first pages are not shrunk far more than the time limit needs, and learning may not go
+// below 0.7, so cold and warm instances shrink animated pages about the same and keep a safety margin.
+const PRIOR_CALIBRATION = { 'webp:animated': 0.75 };
+const MIN_CALIBRATION = { 'webp:animated': 0.7 };
+
+function getCalibration(format, bucket) {
+  const key = statsKey(format, bucket);
+  return calibration.get(key) || { factor: PRIOR_CALIBRATION[key] ?? 1, samples: 0 };
 }
 
-function updateCalibration(format, predictedMs, actualMs, pressure) {
+function updateCalibration(format, bucket, predictedMs, actualMs, pressure) {
   if (!Number.isFinite(predictedMs) || predictedMs <= 0) return;
   if (!Number.isFinite(actualMs) || actualMs <= 0) return;
 
@@ -285,16 +292,17 @@ function updateCalibration(format, predictedMs, actualMs, pressure) {
   if (Number.isFinite(pressure) && pressure > 1.15) return;
 
   const correction = Math.min(4, Math.max(0.25, actualMs / predictedMs));
-  const cal = calibration.get(format) || { factor: 1, samples: 0 };
+  const key = statsKey(format, bucket);
+  const cal = calibration.get(key) || { factor: PRIOR_CALIBRATION[key] ?? 1, samples: 0 };
 
   // Learn fast at first, then dampen to prevent oscillation.
   const alpha = cal.samples < 5 ? 0.35 : 0.15;
 
   cal.factor *= Math.pow(correction, alpha);
-  cal.factor = Math.min(3, Math.max(0.33, cal.factor));
+  cal.factor = Math.min(3, Math.max(MIN_CALIBRATION[key] ?? 0.33, cal.factor));
   cal.samples += 1;
 
-  calibration.set(format, cal);
+  calibration.set(key, cal);
 }
 
 export function predictEncodeMs({
@@ -351,7 +359,7 @@ export function predictEncodeMs({
   const overheadMs = baseOverhead + mp * 100;
 
   // Live calibration from previous real encodes.
-  const cal = getCalibration(format);
+  const cal = getCalibration(format, bucket);
   const calibrationFactor = Number.isFinite(cal.factor) && cal.factor > 0 ? cal.factor : 1;
 
   const predicted = (decodeMs + encodeMs + overheadMs) * (pressureMultiplier + failurePenalty) * calibrationFactor;
@@ -459,7 +467,7 @@ export function recordEncode({
 
   if (Number.isFinite(encodeMs) && encodeMs > 0) {
     if (success && !timedOut) {
-      updateCalibration(format, predictedMs, encodeMs, pressure);
+      updateCalibration(format, bucket, predictedMs, encodeMs, pressure);
     }
 
     const px = Number(pixelCost) || (Number(width) || 1) * (Number(height) || 1) * (frames || 1);
