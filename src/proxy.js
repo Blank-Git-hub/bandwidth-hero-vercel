@@ -547,7 +547,7 @@ const RETRYABLE_STATUSES = new Set([408, 500, 502, 503, 504, 429, 520, 521, 522,
 
 async function fetchWithBackoff(url, headers, signal, deadlineAt = Date.now() + UPSTREAM_TOTAL_DEADLINE_MS) {
   const totalDeadline = deadlineAt;
-  let last error 6 = null;
+  let lastError = null;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     const remaining = totalDeadline - Date.now();
