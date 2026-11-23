@@ -52,6 +52,12 @@ jobs:
             exit 1
           fi
           
+          # If the merge changed nothing, the upstream commits are already in main (merged via squash or rebase), so stop here.
+          if [ "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse 'origin/main^{tree}')" ]; then
+            echo "✅ Upstream changes are already in main. Nothing new to review."
+            exit 0
+          fi
+
           git push origin "$SYNC_BRANCH"
           
           # Open a PR so you can review their new code before it touches your security armor
