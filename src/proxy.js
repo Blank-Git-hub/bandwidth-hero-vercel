@@ -1047,6 +1047,8 @@ export default async function proxy(req, res) {
       // Corrupt image auto-retry
       if (compressError && ENABLE_CORRUPT_RETRY && isSharpDecodeError(compressError)) {
         res.setHeader('X-Corrupt-Retry', 'TRIGGERED');
+        // The stored copy may be the truncated body that just failed to decode; never revalidate against it.
+        RAW_VAULT.delete(cacheKey);
         log.warn(
           {
             reqId,
@@ -1067,8 +1069,10 @@ export default async function proxy(req, res) {
           if (isClientAborted(req)) return;
 
           try {
+            // A conditional request would be answered 304 with no body, so the retry must ask for the full file.
+            const { 'if-none-match': _inm, 'if-modified-since': _ims, ...unconditionalHeaders } = activeHeaders;
             const retryHeaders = {
-              ...activeHeaders,
+              ...unconditionalHeaders,
               'user-agent': getRandomUA(),
               'cache-control': 'no-cache'
             };
