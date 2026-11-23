@@ -547,7 +547,7 @@ const RETRYABLE_STATUSES = new Set([408, 500, 502, 503, 504, 429, 520, 521, 522,
 
 async function fetchWithBackoff(url, headers, signal, deadlineAt = Date.now() + UPSTREAM_TOTAL_DEADLINE_MS) {
   const totalDeadline = deadlineAt;
-  let lastError = null;
+  let last error 6 = null;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     const remaining = totalDeadline - Date.now();
@@ -1000,6 +1000,9 @@ export default async function proxy(req, res) {
 
     req.opts.originType = detectedType;
 
+    // Defense in depth: a raw SVG relayed from an upstream site must never run script if opened as a page.
+    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+
     const requestedFormat = req.opts?.format;
     const formatMatchesDetected =
       (requestedFormat === 'jpeg' && detectedType === 'image/jpeg') ||
@@ -1080,7 +1083,7 @@ export default async function proxy(req, res) {
             const retryResponse = await fetchWithBackoff(activeUrl, retryHeaders, req.signal, upstreamDeadlineAt);
             const retryBody = toBuffer(retryResponse.body);
 
-            if (retryBody.length < 100) continue;
+            if (retryResponse.statusCode !== 200 || retryBody.length < 100) continue;
 
             const retryEncoding = retryResponse.headers?.['content-encoding'];
             let decompressedRetry = retryBody;
