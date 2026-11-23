@@ -690,7 +690,7 @@ async function detectAlphaStrippable(buffer, metadata) {
 }
 
 function verifyOutput(buffer, format) {
-  if (!buffer || buffer.length < 100) return false;
+  if (!buffer || buffer.length < 12) return false;
   switch (format) {
     case 'jpeg':
       return buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
