@@ -318,7 +318,7 @@ const exactCache = new LRUCache({
 
 const FORCE_GRAYSCALE = envBool('FORCE_GRAYSCALE', false);
 const STRIP_ALPHA = envBool('STRIP_ALPHA', true);
-const ENABLE_PLACEHOLDER = envBool('ENABLE_PLACEHOLDER', true);
+const ENABLE_PLACEHOLDER = envBool('ENABLE_PLACEHOLDER', false);
 const ENABLE_PALETTE = envBool('ENABLE_PALETTE', true);
 const ENABLE_VOID_WATCHER = envBool('ENABLE_VOID_WATCHER', false);
 const ENABLE_JUDGE = envBool('ENABLE_JUDGE', true);
